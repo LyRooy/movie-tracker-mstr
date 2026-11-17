@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MVT Reco Admin — Dashboard</title>
-    <link rel="stylesheet" href="/static/css/dashboard.css?v=12">
+    <link rel="stylesheet" href="/static/css/dashboard.css?v=13">
     <script src="/static/js/theme.js?v=8"></script>
 </head>
 <body>
@@ -96,28 +96,6 @@
                 <div class="card-header" style="margin: 1rem 1rem 0;">Dokumentacja API (Swagger UI)</div>
                 <!-- Ramka na port 8000, gdzie działa FastAPI -->
                 <iframe src="https://mvt-api.110187.xyz/docs" class="swagger-frame" title="Swagger UI"></iframe>
-            </div>
-        </div>
-
-        <!-- KOLUMNA 3: CHAT LLM SZKIELET -->
-        <div class="grid-col col-right">
-            <div class="card chat-card">
-                <div class="card-header">Asystent LLM (Wkrótce)</div>
-                
-                <div class="chat-messages">
-                    <div class="chat-placeholder">
-                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
-                        </svg>
-                        <p>Moduł konwersacji z LLM dopiero ewentualnie zostanie wdrożony.</p>
-                        <span style="font-size: 0.75rem; opacity: 0.7;">(Ewnetualne wdrożenie 3. modelu opartego na LLM)</span>
-                    </div>
-                </div>
-
-                <div class="chat-input-area">
-                    <input type="text" placeholder="Zapytaj asystenta AI..." disabled>
-                    <button disabled>Wyślij</button>
-                </div>
             </div>
         </div>
 
