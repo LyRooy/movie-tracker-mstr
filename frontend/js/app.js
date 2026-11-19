@@ -16,6 +16,9 @@ class MovieTracker {
         this._recOffset = 0;      // aktualny offset scrollowania (karty)
         this._recLoading = false; // flaga ładowania (blokuje przyciski)
         this._recLoaded = false;  // czy dane już zostały przeładowane
+        this._lastRecMovies = [];
+        this._lastRecStatus = 'empty';
+        this._showRecModels = localStorage.getItem('admin_show_rec_models') === '1';
         
         // Właściwości kalendarza
         const now = new Date();
@@ -368,6 +371,18 @@ class MovieTracker {
         // Powiązania panelu admina (jeśli admin)
         if (this.currentUser && this.currentUser.role === 'admin') {
             this.bindAdminEvents();
+
+            const recModelCheckbox = document.getElementById('admin-show-rec-models');
+            if (recModelCheckbox) {
+                recModelCheckbox.checked = this._showRecModels;
+                recModelCheckbox.addEventListener('change', (e) => {
+                    this._showRecModels = !!e.target.checked;
+                    localStorage.setItem('admin_show_rec_models', this._showRecModels ? '1' : '0');
+                    if (this._recLoaded) {
+                        this.renderForYou(this._lastRecMovies, this._lastRecStatus);
+                    }
+                });
+            }
         }
     }
     // ============= KONIEC BIND EVENTS =============
@@ -527,10 +542,15 @@ class MovieTracker {
             if (dashAvatar) dashAvatar.src = this.currentUser.avatar_url ||
                 `https://placehold.co/80x80/cccccc/666666/png?text=${encodeURIComponent((this.currentUser.nickname || 'U')[0].toUpperCase())}`;
 
-            // Pokaż nawigację admina jeśli użytkownik jest adminem
+            // Pokaż nawigację admina i przełącznik modeli jeśli użytkownik jest adminem
             if (this.currentUser.role === 'admin') {
                 const adminNavItem = document.getElementById('admin-nav-item');
                 if (adminNavItem) adminNavItem.style.display = 'block';
+
+                const recModelToggleWrap = document.getElementById('admin-rec-model-toggle-wrap');
+                const recModelCheckbox = document.getElementById('admin-show-rec-models');
+                if (recModelToggleWrap) recModelToggleWrap.style.display = 'inline-flex';
+                if (recModelCheckbox) recModelCheckbox.checked = this._showRecModels;
             }
         }
     }
@@ -2634,11 +2654,24 @@ async triggerFastApiRecalculation() {
         this.renderForYou(data.results || [], status);
     }
 
+    formatRecTypeBadge(recType) {
+        const labels = {
+            collaborative_filtering: 'CF',
+            content_based: 'CB',
+            llm_querec: 'LLM',
+            hybrid_querec: 'HYBRID'
+        };
+        return labels[recType] || String(recType).toUpperCase();
+    }
+
     renderForYou(movies, status) {
         const track = document.getElementById('for-you-track');
         const prev = document.getElementById('for-you-prev');
         const next = document.getElementById('for-you-next');
         if (!track) return;
+
+        this._lastRecMovies = movies || [];
+        this._lastRecStatus = status;
 
         track.classList.remove('is-loading');
         track.innerHTML = '';
@@ -2691,9 +2724,10 @@ async triggerFastApiRecalculation() {
             card.dataset.movieId = m.id;
             const poster = this.getPosterUrl(m);
 
-            const cfLabel = m.recType === 'content_based'
-                ? `<span class="for-you-card-cf">CB</span>`
-                : `<span class="for-you-card-cf">CF</span>`;
+            const isAdmin = this.currentUser && this.currentUser.role === 'admin';
+            const cfLabel = (isAdmin && this._showRecModels && m.recType)
+                ? `<span class="for-you-card-cf">${this.escapeHtml(this.formatRecTypeBadge(m.recType))}</span>`
+                : '';
 
             const imdb = m.imdb_rating != null
                 ? `<span class="for-you-card-imdb">⭐ ${parseFloat(m.imdb_rating).toFixed(1)}</span>`
@@ -2802,25 +2836,28 @@ async triggerFastApiRecalculation() {
         }
 
         // Obsługa machnięcia palcem (swipe) na telefonach
-        let startX = 0;
-        let panning = false;
-        track.addEventListener('touchstart', (e) => {
-            startX = e.touches[0].clientX;
-            panning = true;
-        }, { passive: true });
-
-        track.addEventListener('touchmove', (e) => {
-            if (!panning) return;
-            const dx = e.touches[0].clientX - startX;
-            // Reagujemy, gdy palec przesunie się o min. 40px
-            if (Math.abs(dx) > 40) { 
-                this._scrollForYouTo(dx < 0 ? 1 : -1);
+        if (!track.dataset.touchBound) {
+            track.dataset.touchBound = '1';
+            let startX = 0;
+            let panning = false;
+            track.addEventListener('touchstart', (e) => {
                 startX = e.touches[0].clientX;
-                panning = false;
-            }
-        }, { passive: true });
+                panning = true;
+            }, { passive: true });
 
-        track.addEventListener('touchend', () => { panning = false; }, { passive: true });
+            track.addEventListener('touchmove', (e) => {
+                if (!panning) return;
+                const dx = e.touches[0].clientX - startX;
+                // Reagujemy, gdy palec przesunie się o min. 40px
+                if (Math.abs(dx) > 40) { 
+                    this._scrollForYouTo(dx < 0 ? 1 : -1);
+                    startX = e.touches[0].clientX;
+                    panning = false;
+                }
+            }, { passive: true });
+
+            track.addEventListener('touchend', () => { panning = false; }, { passive: true });
+        }
     }
 
     // Obsługa klawiszy strzałek dla paska rekomendacji

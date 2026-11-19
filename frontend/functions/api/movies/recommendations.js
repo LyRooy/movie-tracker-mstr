@@ -33,6 +33,9 @@ export async function onRequest(context) {
       });
     }
 
+    const userRow = await env.db.prepare('SELECT role FROM users WHERE id = ?').bind(userId).first();
+    const isAdmin = userRow?.role === 'admin';
+
     // Złączenie rekomendacji (CF + CB) z pełnymi danymi metadanymi filmu z tabeli movies.
     // recommendation_type: 'collaborative_filtering' (CF) lub 'content_based' (CB).
     // predicted_rating: rekomendowana ocena (skala 1-5).
@@ -83,7 +86,7 @@ const rows = await env.db.prepare(`
           poster = `https://placehold.co/200x300/4CAF50/white/png?text=${encodeURIComponent(r.title || '?')}`;
       }
       
-      return {
+      const item = {
         id: r.movie_id,
         title: r.title,
         media_type: r.media_type,
@@ -99,9 +102,12 @@ const rows = await env.db.prepare(`
         recommended_rating: r.predicted_rating,
         confidence_lower: r.confidence_lower,
         confidence_upper: r.confidence_upper,
-        // 'CF' = collaborative_filtering, 'CB' = content_based
-        recType: r.recommendation_type === 'content_based' ? 'content_based' : 'collaborative_filtering',
       };
+      if (isAdmin) {
+        // Zwracaj typ modelu tylko administratorowi (przepuszcza też przyszłe typy np. LLM/hybryda)
+        item.recType = r.recommendation_type || 'collaborative_filtering';
+      }
+      return item;
     });
 
     const hasMore = recommendations.length > limit;

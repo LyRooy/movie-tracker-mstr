@@ -445,11 +445,40 @@ body {
 
 .for-you-carousel-header {
     display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
 }
 
 .for-you-carousel-header h2 {
+    margin: 0;
+}
+
+.admin-rec-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.75rem;
+    border-radius: 20px;
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    transition: var(--transition);
+}
+
+.admin-rec-toggle:hover {
+    border-color: var(--secondary-color);
+    color: var(--text-color);
+}
+
+.admin-rec-toggle input[type="checkbox"] {
+    accent-color: var(--secondary-color);
+    cursor: pointer;
     margin: 0;
 }
 
