@@ -15,18 +15,105 @@ class DatabaseManager:
         
         self.local_db_path = "/app/movies.db"
 
+    @staticmethod
+    def _has_d1_overload_error(res_json) -> bool:
+        if not isinstance(res_json, dict):
+            return False
+        return any(
+            isinstance(err, dict) and err.get("code") == 7429
+            for err in (res_json.get("errors") or [])
+        )
+
+    @staticmethod
+    def _compute_retry_delay(res, attempt: int, base_delay: float) -> float:
+        retry_after = None
+        if res is not None and getattr(res, "headers", None) is not None:
+            raw = res.headers.get("Retry-After")
+            if isinstance(raw, (int, float, str)):
+                try:
+                    retry_after = max(0.5, min(15.0, float(raw)))
+                except ValueError:
+                    retry_after = None
+        return retry_after if retry_after is not None else base_delay * (attempt + 1)
+
+    @staticmethod
+    def _extract_rows(res_json) -> list:
+        if not isinstance(res_json, dict):
+            return []
+        data = res_json.get("result") or []
+        if not data:
+            return []
+        if isinstance(data[0], dict) and "results" in data[0]:
+            return data[0].get("results") or []
+        return data
+
+    def _execute_d1(
+        self,
+        sql: str,
+        params=None,
+        max_retries: int = 3,
+        base_delay: float = 2.0,
+        debug_label: str | None = None,
+    ):
+        """Wykonuje zapytanie D1 z automatycznym ponawianiem przy przeciążeniu (429/7429) i błędach 5xx."""
+        payload = {"sql": sql}
+        if params is not None:
+            payload["params"] = params
+
+        for attempt in range(max_retries + 1):
+            res = None
+            res_json = None
+            try:
+                res = requests.post(self.endpoint, json=payload, headers=self.headers, timeout=30)
+                try:
+                    res_json = res.json()
+                except Exception:
+                    res_json = None
+            except requests.RequestException as e:
+                if attempt < max_retries:
+                    delay = base_delay * (attempt + 1)
+                    print(f"D1 błąd sieci ({e}), ponawiam próbę {attempt + 1}/{max_retries} za {delay:.1f}s...")
+                    time.sleep(delay)
+                    continue
+                print(f"BŁĄD D1 (sieć): {e}")
+                return None
+
+            is_retryable = (
+                res.status_code in (429, 500, 502, 503, 504)
+                or self._has_d1_overload_error(res_json)
+            )
+            if is_retryable and attempt < max_retries:
+                delay = self._compute_retry_delay(res, attempt, base_delay)
+                print(
+                    f"D1 tymczasowo przeciążone/błąd ({res.status_code}), "
+                    f"ponawiam próbę {attempt + 1}/{max_retries} za {delay:.1f}s..."
+                )
+                time.sleep(delay)
+                continue
+
+            if debug_label:
+                print(f"DEBUG {debug_label} D1 Status: {res.status_code} | Body: {res.text}")
+
+            if res.status_code != 200 or not isinstance(res_json, dict) or res_json.get("success") is False:
+                if not debug_label:
+                    print(f"BŁĄD D1 Status: {res.status_code} | Body: {res.text}")
+                return None
+
+            statements = res_json.get("result") or []
+            if any(isinstance(stmt, dict) and stmt.get("success") is False for stmt in statements):
+                if not debug_label:
+                    print(f"BŁĄD D1 (statement): {res.text}")
+                return None
+
+            return res_json
+
+        return None
+
     def fetch_user_ratings(self, user_id: int):
         sql_query = "SELECT rating, movie_id FROM reviews WHERE user_id = ? ORDER BY created_at DESC"
-        payload = {"sql": sql_query, "params": [user_id]}
-        
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        
-        # Debug, abyśmy widzieli co Cloudflare faktycznie odpowiada
-        print(f"DEBUG FETCH D1 Status: {res.status_code} | Body: {res.text}")
-        
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-            rows = data[0].get('results', []) if data and 'results' in data[0] else data
+        res_json = self._execute_d1(sql_query, params=[user_id], debug_label="FETCH")
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
             return pd.DataFrame(rows, columns=["rating", "movie_id"])
         return None
 
@@ -42,29 +129,11 @@ class DatabaseManager:
         offset = 0
 
         while True:
-            payload = {"sql": sql_query, "params": [batch_size, offset]}
-            try:
-                res = requests.post(self.endpoint, json=payload, headers=self.headers)
-            except Exception as e:
-                print(f"BŁĄD FETCH ALL D1 (sieć): {e}")
+            res_json = self._execute_d1(sql_query, params=[batch_size, offset])
+            if res_json is None:
                 return None
 
-            if res.status_code != 200:
-                print(f"BŁĄD FETCH ALL D1 Status: {res.status_code} | Body: {res.text}")
-                return None
-
-            try:
-                res_json = res.json()
-            except Exception as e:
-                print(f"BŁĄD FETCH ALL D1 (JSON): {e}")
-                return None
-
-            if res_json.get("success") is False:
-                print(f"BŁĄD FETCH ALL D1 Body: {res.text}")
-                return None
-
-            data = res_json.get("result", [])
-            rows = data[0].get('results', []) if data and 'results' in data[0] else data
+            rows = self._extract_rows(res_json)
             if not rows:
                 break
 
@@ -91,56 +160,58 @@ class DatabaseManager:
 
     def fetch_watched_movies(self, user_id: int):
         sql_query = "SELECT movie_id FROM watched WHERE user_id = ?"
-        payload = {"sql": sql_query, "params": [user_id]}
-        
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-            rows = data[0].get('results', []) if data and 'results' in data[0] else data
+        res_json = self._execute_d1(sql_query, params=[user_id])
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
             return [r["movie_id"] for r in rows] if rows else []
         return []
 
     def fetch_onboarding_movies(self, user_id: int):
         sql_query = "SELECT movie_id FROM user_onboarding_movies WHERE user_id = ?"
-        payload = {"sql": sql_query, "params": [user_id]}
-        
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-            rows = data[0].get('results', []) if data and 'results' in data[0] else data
+        res_json = self._execute_d1(sql_query, params=[user_id])
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
             return [r["movie_id"] for r in rows] if rows else []
         return []
 
     def get_cached_recommendations(self, user_id: int, rec_type: str):
         sql_query = "SELECT movie_id, predicted_rating, confidence_lower, confidence_upper FROM user_recommendations WHERE user_id = ? AND recommendation_type = ? AND expires_at > ? ORDER BY predicted_rating DESC"
-        payload = {"sql": sql_query, "params": [user_id, rec_type, str(int(time.time()))]}
-        
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-            rows = data[0].get('results', []) if data else []
+        res_json = self._execute_d1(sql_query, params=[user_id, rec_type, str(int(time.time()))])
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
             return [{"movie_id": r["movie_id"], "rating": r["predicted_rating"], "confidence_interval": [r["confidence_lower"], r["confidence_upper"]]} for r in rows] if rows else None
         return None
 
-    def save_cached_recommendations(self, user_id: int, recs: list, minutes: int, rec_type: str):
+    def save_cached_recommendations(self, user_id: int, recs: list, minutes: int, rec_type: str) -> bool:
         if not recs:
-            return
-        expires_at = str(int(time.time()) + (minutes * 60))
-        base_query = "INSERT OR REPLACE INTO user_recommendations (user_id, movie_id, predicted_rating, confidence_lower, confidence_upper, recommendation_type, expires_at) VALUES "
-        values = [f"({user_id}, {r['movie_id']}, {r['rating']}, {r['confidence_interval'][0]}, {r['confidence_interval'][1]}, '{rec_type}', '{expires_at}')" for r in recs]
-        
-        payload = {"sql": base_query + ",\n".join(values) + ";"}
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        
-        print(f"DEBUG SAVE D1 Status: {res.status_code} | Body: {res.text}")
+            return False
+        uid = int(user_id)
+        safe_rec_type = str(rec_type).replace("'", "''")
+        expires_at = str(int(time.time()) + (int(minutes) * 60))
+
+        delete_query = (
+            f"DELETE FROM user_recommendations "
+            f"WHERE user_id = {uid} AND recommendation_type = '{safe_rec_type}';\n"
+        )
+        insert_header = (
+            "INSERT OR REPLACE INTO user_recommendations "
+            "(user_id, movie_id, predicted_rating, confidence_lower, confidence_upper, recommendation_type, expires_at) VALUES "
+        )
+        values = [
+            f"({uid}, {int(r['movie_id'])}, {float(r['rating'])}, "
+            f"{float(r['confidence_interval'][0])}, {float(r['confidence_interval'][1])}, "
+            f"'{safe_rec_type}', '{expires_at}')"
+            for r in recs
+        ]
+        sql = delete_query + insert_header + ",\n".join(values) + ";"
+        res_json = self._execute_d1(sql, debug_label="SAVE")
+        return res_json is not None
 
     def fetch_users(self):
         sql_query = "SELECT id, nickname FROM users ORDER BY id"
-        payload = {"sql": sql_query}
-        res = requests.post(self.endpoint, json=payload, headers=self.headers)
-        if res.status_code == 200:
-            data = res.json().get("result", [])
-            rows = data[0].get('results', []) if data else []
+        res_json = self._execute_d1(sql_query)
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
             return [{"user_id": r["id"], "nickname": r["nickname"]} for r in rows] if rows else []
         return []
 

@@ -29,6 +29,30 @@ async def verify_api_key(header: str = Security(APIKeyHeader(name="X-API-Key", a
     raise HTTPException(status_code=403, detail="Niepoprawny klucz API")
 
 
+def _persist_recommendations(
+    user_id: int, recs: list, rec_type: str, key: str, label: str, force: bool, result: dict
+):
+    """Zapisuje rekomendacje do D1, aktualizuje licznik i loguje wynik lub ostrzeżenie."""
+    saved = db.save_cached_recommendations(user_id, recs, CACHE_MINUTES, rec_type)
+    tracker.record_count(key, len(recs))
+    result["data"] = recs
+    if saved:
+        prefix = "Wymuszono przeliczenie." if force else "Wygenerowano"
+        tracker.log(
+            key,
+            label,
+            f"{prefix} {len(recs)} rekomendacji ({label}) dla user_id={user_id}. Top ID: {[r['movie_id'] for r in recs[:3]]}",
+        )
+    else:
+        tracker.log(
+            key,
+            label,
+            f"Wygenerowano {len(recs)} rekomendacji ({label}) dla user_id={user_id}, ale zapis do D1 nie powiódł się.",
+            level="warning",
+        )
+        result["cache_warning"] = "Nie udało się zapisać rekomendacji do bazy D1."
+
+
 def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set[int], force: bool) -> dict:
     """Oblicza lub pobiera z cache rekomendacje Collaborative Filtering w oparciu o globalną macierz ocen."""
     if not force:
@@ -120,15 +144,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
     ]
 
     if top_cf:
-        db.save_cached_recommendations(user_id, top_cf, CACHE_MINUTES, REC_TYPE_CF)
-        tracker.record_count("cf", len(top_cf))
-        prefix = "Wymuszono przeliczenie." if force else "Wygenerowano"
-        tracker.log(
-            "cf",
-            "CF",
-            f"{prefix} {len(top_cf)} rekomendacji (CF) dla user_id={user_id}. Top ID: {[r['movie_id'] for r in top_cf[:3]]}",
-        )
-        result["data"] = top_cf
+        _persist_recommendations(user_id, top_cf, REC_TYPE_CF, "cf", "CF", force, result)
 
     return result
 
@@ -209,15 +225,7 @@ def _compute_cb_recommendations(
                     }
                 )
 
-            db.save_cached_recommendations(user_id, cb_recs, CACHE_MINUTES, REC_TYPE_CB)
-            tracker.record_count("cb", len(cb_recs))
-            prefix = "Wymuszono przeliczenie." if force else "Wygenerowano"
-            tracker.log(
-                "cb",
-                "CB",
-                f"{prefix} {len(cb_recs)} rekomendacji (CB) dla user_id={user_id}. Top ID: {[r['movie_id'] for r in cb_recs[:3]]}",
-            )
-            result["data"] = cb_recs
+            _persist_recommendations(user_id, cb_recs, REC_TYPE_CB, "cb", "CB", force, result)
 
     return result
 
