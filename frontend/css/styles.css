@@ -4901,8 +4901,14 @@ body.transitions-enabled * {
     color: var(--text-color);
 }
 
-.ask-ai-drawer-title i {
+.ask-ai-drawer-title svg {
     color: var(--secondary-color);
+}
+
+.ai-sparkle-icon {
+    display: inline-block;
+    flex-shrink: 0;
+    vertical-align: middle;
 }
 
 .ask-ai-drawer-actions {

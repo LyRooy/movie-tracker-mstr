@@ -2738,6 +2738,10 @@ class MovieTracker {
     }
 
     // ============= ROZWIJANY CZAT "ZAPYTAJ AI" =============
+    _getAiSparkleSvg(size = 20) {
+        return `<svg class="ai-sparkle-icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.5 2L12.7 8.3L19 10.5L12.7 12.7L10.5 19L8.3 12.7L2 10.5L8.3 8.3L10.5 2Z"/><path d="M18.5 14L19.6 17.4L23 18.5L19.6 19.6L18.5 23L17.4 19.6L14 18.5L17.4 17.4L18.5 14Z"/><path d="M19.5 2.5L20.1 4.4L22 5L20.1 5.6L19.5 7.5L18.9 5.6L17 5L18.9 4.4L19.5 2.5Z"/></svg>`;
+    }
+
     toggleAskAIDrawer(forceState = null) {
         const drawer = document.getElementById('ask-ai-drawer');
         const fab = document.getElementById('ask-ai-fab');
@@ -2749,7 +2753,7 @@ class MovieTracker {
         fab.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
         fab.innerHTML = shouldOpen
             ? '<i class="fas fa-chevron-down"></i>'
-            : '<i class="fas fa-magic"></i>';
+            : this._getAiSparkleSvg(22);
 
         if (shouldOpen) {
             const input = document.getElementById('ask-ai-input');
@@ -2992,8 +2996,8 @@ class MovieTracker {
                 <div class="for-you-card-body">
                     <div class="for-you-card-title">${this.escapeHtml(m.title || '')}</div>
                     <div class="for-you-card-meta">
-                        <span class="for-you-card-recommended">
-                            <i class="fas fa-magic"></i>
+                        <span class="for-you-card-recommended" title="Przewidywana ocena przez algorytm rekomendacji (skala 1-5)">
+                            ${this._getAiSparkleSvg(12)}
                             ${parseFloat(m.recommended_rating).toFixed(1)}
                         </span>
                         ${imdb}
