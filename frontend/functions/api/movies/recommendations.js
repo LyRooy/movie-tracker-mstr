@@ -46,10 +46,12 @@ const rows = await env.db.prepare(`
       SELECT
         r.user_id,
         r.movie_id,
+        r.rank,
         r.predicted_rating,
         r.confidence_lower,
         r.confidence_upper,
         r.recommendation_type,
+        r.updated_at,
         m.id,
         m.title,
         m.media_type,
@@ -65,11 +67,7 @@ const rows = await env.db.prepare(`
       FROM user_recommendations r
       JOIN movies m ON m.id = r.movie_id
       WHERE r.user_id = ?
-        AND (
-          CAST(r.expires_at AS INTEGER) > unixepoch()
-          OR r.expires_at > strftime('%Y-%m-%d %H:%M:%f', 'now')
-        )
-      ORDER BY r.created_at DESC
+      ORDER BY r.rank ASC, r.predicted_rating DESC
       LIMIT ? OFFSET ?
     `).bind(userId, limit + 1, offset).all();
 
@@ -99,6 +97,8 @@ const rows = await env.db.prepare(`
         poster_url: poster,
         imdb_rating: r.imdb_rating,
         popularity: r.popularity,
+        rank: r.rank,
+        updated_at: r.updated_at,
         recommended_rating: r.predicted_rating,
         confidence_lower: r.confidence_lower,
         confidence_upper: r.confidence_upper,
@@ -113,11 +113,17 @@ const rows = await env.db.prepare(`
     const hasMore = recommendations.length > limit;
     if (hasMore) recommendations.pop();
 
+    const updatedAt = recommendations.reduce(
+      (latest, item) => (!latest || (item.updated_at && item.updated_at > latest)) ? item.updated_at : latest,
+      null
+    );
+
     // Dane są per-user - nie cachujemy na poziomie CDN (każdy użytkownik ma inne rekomendacje).
     return new Response(JSON.stringify({
       userId,
       results: recommendations,
       count: recommendations.length,
+      updatedAt,
     }), {
       status: 200,
       headers: {

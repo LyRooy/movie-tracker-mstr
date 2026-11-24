@@ -12,7 +12,6 @@ model_manager = RecommendationModelManager()
 db = DatabaseManager()
 
 API_KEY = os.getenv("MVT_API_KEY")
-CACHE_MINUTES = 7 * 24 * 60  # 7 dni w minutach
 REC_TYPE_CF = "collaborative_filtering"
 REC_TYPE_CB = "content_based"
 
@@ -33,7 +32,7 @@ def _persist_recommendations(
     user_id: int, recs: list, rec_type: str, key: str, label: str, force: bool, result: dict
 ):
     """Zapisuje rekomendacje do D1, aktualizuje licznik i loguje wynik lub ostrzeżenie."""
-    saved = db.save_cached_recommendations(user_id, recs, CACHE_MINUTES, rec_type)
+    saved = db.save_cached_recommendations(user_id, recs, rec_type)
     tracker.record_count(key, len(recs))
     result["data"] = recs
     if saved:

@@ -18,6 +18,9 @@ class MovieTracker {
         this._recLoaded = false;  // czy dane już zostały przeładowane
         this._lastRecMovies = [];
         this._lastRecStatus = 'empty';
+        this._lastRecUpdatedAt = null;
+        this._isRecalculating = false;
+        this._recalcQueued = false;
         this._showRecModels = localStorage.getItem('admin_show_rec_models') === '1';
         
         // Właściwości kalendarza
@@ -2553,55 +2556,91 @@ class MovieTracker {
 
     // ============= PASEK REKOMENDACJI "DLA CIEBIE" =============
     // Działa per-user: Worker (/api/movies/recommendations) czyta rekomendacje
-    // bezpośrednio z bazy D1 (env.db) a nie z backendu FastAPI.
+    // bezpośrednio z bazy D1 (env.db), a FastAPI nadpisuje je przy zmianie ocen/filmów.
     // Dzięki temu strona działa nawet gdy serwer Python jest wyłączony.
 
-    // Wymusza przeładowanie rekomendacji (tylko po upływie cooldownu).
-    // Zwraca true jeśli przeładowanie odbyło się.
-    // Planuj pokazanie rekomendacji "Dla ciebie" w tle.
-    // Cooldown = 5 minut, żeby silnik zdążył policzyć rekomendacje.
-    // Po upływie 5 minut odświeża TYLKO sekcję "Dla ciebie" (nie całą stronę).
-    // Nowa metoda do wywołania przeliczenia na FastAPI
-async triggerFastApiRecalculation() {
+    _renderRecUpdatedAt(timestamp) {
+        const el = document.getElementById('for-you-updated-at');
+        if (!el) return;
+        el.classList.remove('is-updating');
+        if (!timestamp) {
+            el.textContent = '';
+            el.style.display = 'none';
+            return;
+        }
+        const normalized = timestamp.includes('T') ? timestamp : timestamp.replace(' ', 'T') + 'Z';
+        const parsed = new Date(normalized);
+        if (Number.isNaN(parsed.getTime())) {
+            el.textContent = '';
+            el.style.display = 'none';
+            return;
+        }
+        const formatted = parsed.toLocaleString('pl-PL', {
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+        el.textContent = `Zaktualizowano: ${formatted}`;
+        el.style.display = 'inline-block';
+    }
+
+    async triggerFastApiRecalculation({ silent = false } = {}) {
         if (!this.currentUser) return;
+        if (this._isRecalculating) {
+            this._recalcQueued = true;
+            return;
+        }
+
+        this._isRecalculating = true;
+        this._recalcQueued = false;
+
+        const updatedEl = document.getElementById('for-you-updated-at');
+        if (updatedEl) {
+            updatedEl.classList.add('is-updating');
+            updatedEl.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Aktualizuję rekomendacje...';
+            updatedEl.style.display = 'inline-block';
+        }
+
+        let shouldRestart = false;
         try {
-            console.log("Wysyłam sygnał do Workera o przeliczenie rekomendacji...");
-            // Wywołanie bezpiecznego Workera, który ma dostęp do kluczy
-            fetch('/api/movies/recalculate', {
+            const response = await fetch('/api/movies/recalculate', {
                 method: 'POST',
                 headers: this.getAuthHeaders()
-            }).catch(e => console.warn('Błąd wywołania Workera:', e));
+            });
+
+            if (response.ok) {
+                await this.loadRecommendations({ skipAutoRecalc: true });
+                if (!silent) {
+                    this.showNotification('Rekomendacje zostały zaktualizowane!', 'success');
+                }
+            } else {
+                console.warn('Błąd przeliczania rekomendacji:', response.status);
+                this._renderRecUpdatedAt(this._lastRecUpdatedAt);
+            }
         } catch (e) {
-            console.warn(e);
+            console.warn('Błąd wywołania Workera:', e);
+            this._renderRecUpdatedAt(this._lastRecUpdatedAt);
+        } finally {
+            this._isRecalculating = false;
+            if (this._recalcQueued) {
+                this._recalcQueued = false;
+                shouldRestart = true;
+            }
+        }
+
+        if (shouldRestart) {
+            await this.triggerFastApiRecalculation({ silent });
         }
     }
 
-    // Aktualizacja istniejącej metody
-    scheduleForYouRefresh() {
-        try {
-            const pendingKey = 'for-you-pending';
-            const pending = localStorage.getItem(pendingKey);
-            if (pending !== '1') {
-                localStorage.setItem(pendingKey, '1');
-                
-                // 1. Natychmiast uderz w FastAPI by zaczęło liczyć
-                this.triggerFastApiRecalculation();
-
-                // 2. Po 5 minutach odpytaj bazę D1 o nowe wyniki
-                setTimeout(() => {
-                    localStorage.removeItem(pendingKey);
-                    if (this.currentSection === 'dashboard') {
-                        this.loadRecommendations();
-                    }
-                }, 5 * 60 * 1000); 
-            }
-        } catch {}
-    }
-
-    async loadRecommendations() {
+    async loadRecommendations({ skipAutoRecalc = false } = {}) {
         this._recLoaded = false;
         this._recOffset = 0;
         this._recCount = 20;
+
+        try { localStorage.removeItem('for-you-pending'); } catch {}
 
         const container = document.getElementById('for-you-track');
         if (!container) return;
@@ -2624,19 +2663,21 @@ async triggerFastApiRecalculation() {
 
             if (res.ok) {
                 data = await res.json();
-                
+                this._lastRecUpdatedAt = data.updatedAt || null;
+                if (!this._isRecalculating) {
+                    this._renderRecUpdatedAt(this._lastRecUpdatedAt);
+                }
+
                 // Jeśli D1 ma dane, status to 'ok'
                 if (data.results && data.results.length > 0) {
                     status = 'ok';
                 } else {
                     status = 'empty';
-                    
-                    // 2. BRAK DANYCH W D1 -> Zimny start. 
-                    // Wywołujemy naszą bezpieczną metodę, która przez Workera 
-                    // uderzy do FastAPI (POST /force-recalculate).
-                    if (this.currentUser) {
-                        console.log("D1 jest puste, szturcham Workera żeby wymusił przeliczenie w FastAPI...");
-                        this.triggerFastApiRecalculation();
+
+                    // 2. BRAK DANYCH W D1 -> Zimny start.
+                    if (!skipAutoRecalc && this.currentUser) {
+                        console.log("D1 jest puste, uruchamiam przeliczenie w FastAPI...");
+                        this.triggerFastApiRecalculation({ silent: true });
                     }
                 }
             } else {
@@ -3548,9 +3589,6 @@ async triggerFastApiRecalculation() {
         const statusSelect = document.getElementById('movie-status');
         const selectedStatus = statusSelect ? statusSelect.value : 'watched';
 
-        // Zaplanuj pokazanie rekomendacji "Dla ciebie" po 5 minutach (silnik w tle)
-        this.scheduleForYouRefresh();
-
         const movieData = {
             ...movie,
             rating: this.currentRating,
@@ -3570,6 +3608,7 @@ async triggerFastApiRecalculation() {
                 const result = await response.json();
                 // Przeładuj dane filmów, aby odświeżyć listę
                 await this.loadMoviesData();
+                this.triggerFastApiRecalculation();
                 this.closeModal();
                 
                 // Jeśli to serial, od razu otwórz modal z zakładką odcinków
@@ -3658,6 +3697,7 @@ async triggerFastApiRecalculation() {
                 
                 // Przeładuj dane filmów, aby odświeżyć listę
                 await this.loadMoviesData();
+                this.triggerFastApiRecalculation();
                 this.closeModal();
                 this.showNotification(movie.type === 'series' ? 'Serial został zaktualizowany!' : 'Film został zaktualizowany!');
             } else {
@@ -4753,6 +4793,8 @@ async triggerFastApiRecalculation() {
                 }
             }
 
+            this.triggerFastApiRecalculation();
+
         } catch (e) {
             console.error('Error saving favorites:', e);
             this.showNotification('Błąd podczas zapisywania. Spróbuj ponownie.', 'error');
@@ -4931,9 +4973,7 @@ async triggerFastApiRecalculation() {
                     // Synchronizuj motyw z preferencji użytkownika
                     const userTheme = data.user && data.user.theme_preference ? data.user.theme_preference : 'light';
                     localStorage.setItem('theme', userTheme);
-                    
-                    // Logowanie to aktywność -> uruchom silnik rekomendacji w tle
-                    this.scheduleForYouRefresh();
+                    localStorage.removeItem('for-you-pending');
                     
                     // Przeładuj stronę z nowym stanem zalogowania
                     location.reload();

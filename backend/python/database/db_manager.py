@@ -175,19 +175,32 @@ class DatabaseManager:
         return []
 
     def get_cached_recommendations(self, user_id: int, rec_type: str):
-        sql_query = "SELECT movie_id, predicted_rating, confidence_lower, confidence_upper FROM user_recommendations WHERE user_id = ? AND recommendation_type = ? AND expires_at > ? ORDER BY predicted_rating DESC"
-        res_json = self._execute_d1(sql_query, params=[user_id, rec_type, str(int(time.time()))])
+        sql_query = (
+            "SELECT movie_id, predicted_rating, confidence_lower, confidence_upper, rank, updated_at "
+            "FROM user_recommendations "
+            "WHERE user_id = ? AND recommendation_type = ? "
+            "ORDER BY rank ASC, predicted_rating DESC"
+        )
+        res_json = self._execute_d1(sql_query, params=[user_id, rec_type])
         if res_json is not None:
             rows = self._extract_rows(res_json)
-            return [{"movie_id": r["movie_id"], "rating": r["predicted_rating"], "confidence_interval": [r["confidence_lower"], r["confidence_upper"]]} for r in rows] if rows else None
+            return [
+                {
+                    "movie_id": r["movie_id"],
+                    "rating": r["predicted_rating"],
+                    "confidence_interval": [r["confidence_lower"], r["confidence_upper"]],
+                    "rank": r.get("rank"),
+                    "updated_at": r.get("updated_at"),
+                }
+                for r in rows
+            ] if rows else None
         return None
 
-    def save_cached_recommendations(self, user_id: int, recs: list, minutes: int, rec_type: str) -> bool:
+    def save_cached_recommendations(self, user_id: int, recs: list, rec_type: str) -> bool:
         if not recs:
             return False
         uid = int(user_id)
         safe_rec_type = str(rec_type).replace("'", "''")
-        expires_at = str(int(time.time()) + (int(minutes) * 60))
 
         delete_query = (
             f"DELETE FROM user_recommendations "
@@ -195,13 +208,13 @@ class DatabaseManager:
         )
         insert_header = (
             "INSERT OR REPLACE INTO user_recommendations "
-            "(user_id, movie_id, predicted_rating, confidence_lower, confidence_upper, recommendation_type, expires_at) VALUES "
+            "(user_id, movie_id, rank, predicted_rating, confidence_lower, confidence_upper, recommendation_type, updated_at) VALUES "
         )
         values = [
-            f"({uid}, {int(r['movie_id'])}, {float(r['rating'])}, "
+            f"({uid}, {int(r['movie_id'])}, {rank}, {float(r['rating'])}, "
             f"{float(r['confidence_interval'][0])}, {float(r['confidence_interval'][1])}, "
-            f"'{safe_rec_type}', '{expires_at}')"
-            for r in recs
+            f"'{safe_rec_type}', strftime('%Y-%m-%d %H:%M:%f', 'now'))"
+            for rank, r in enumerate(recs, start=1)
         ]
         sql = delete_query + insert_header + ",\n".join(values) + ";"
         res_json = self._execute_d1(sql, debug_label="SAVE")

@@ -455,6 +455,17 @@ body {
     margin: 0;
 }
 
+.for-you-header-left {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.for-you-subtitle.is-updating {
+    color: var(--secondary-color);
+}
+
 .admin-rec-toggle {
     display: inline-flex;
     align-items: center;
