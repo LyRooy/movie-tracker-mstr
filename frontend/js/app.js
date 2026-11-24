@@ -2997,7 +2997,7 @@ class MovieTracker {
                     <div class="for-you-card-title">${this.escapeHtml(m.title || '')}</div>
                     <div class="for-you-card-meta">
                         <span class="for-you-card-recommended" title="Przewidywana ocena przez algorytm rekomendacji (skala 1-5)">
-                            ${this._getAiSparkleSvg(12)}
+                            <i class="fas fa-thumbs-up"></i>
                             ${parseFloat(m.recommended_rating).toFixed(1)}
                         </span>
                         ${imdb}
