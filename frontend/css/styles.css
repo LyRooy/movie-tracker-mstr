@@ -268,12 +268,17 @@ body {
     display: flex;
     flex-direction: column;
     gap: 1rem;
-    grid-row: 1 / span 2;
+    grid-row: 1 / span 3;
 }
 
-/* W prawej kolumnie: "Dla ciebie" NAD "Top filmy" (obie w kolumnie 2, ułożone pionowo)
+/* W prawej kolumnie: "Dla ciebie", "Zapytaj AI" i "Top filmy" ułożone pionowo w kolumnie 2
    Dzięki temu na telefonie też są ułożone pionowo w jednej kolumnie */
 .dashboard-layout.for-you-right .for-you-carousel-wrap {
+    grid-column: 2;
+    align-self: start;
+}
+
+.dashboard-layout.for-you-right .ask-ai-section {
     grid-column: 2;
     align-self: start;
 }
@@ -4714,8 +4719,9 @@ body.transitions-enabled * {
 
 /* Responsywność dla dashboardu */
 @media (max-width: 768px) {
-    /* Wymuszenie ułożenia pionowego sekcji "Dla ciebie" i "Top filmy" */
+    /* Wymuszenie ułożenia pionowego sekcji "Dla ciebie", "Zapytaj AI" i "Top filmy" */
     .dashboard-layout.for-you-right .for-you-carousel-wrap,
+    .dashboard-layout.for-you-right .ask-ai-section,
     .dashboard-layout.for-you-right .dashboard-top-movies {
         grid-column: 1; 
     }
@@ -4811,5 +4817,251 @@ body.transitions-enabled * {
     }
     .fpm-badges-row .badge-item span {
         font-size: 0.65rem;
+    }
+}
+
+/* Sekcja "Zapytaj AI" na dashboardzie */
+.ask-ai-section {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 1rem 1.15rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-width: 0;
+}
+
+.ask-ai-title-wrap {
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.65rem;
+}
+
+.ask-ai-title-wrap h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+}
+
+.ask-ai-title-wrap h2 i {
+    color: var(--secondary-color);
+}
+
+.ask-ai-subtitle {
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.ask-ai-form {
+    display: flex;
+    flex-direction: column;
+    gap: 0.55rem;
+}
+
+.ask-ai-input-row {
+    display: flex;
+    gap: 0.6rem;
+    align-items: stretch;
+}
+
+.ask-ai-input-row input {
+    flex: 1;
+    min-width: 0;
+    padding: 0.65rem 0.9rem;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--background-color);
+    color: var(--text-color);
+    font-size: 0.95rem;
+}
+
+.ask-ai-input-row input:focus {
+    outline: none;
+    border-color: var(--secondary-color);
+}
+
+.ask-ai-submit {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    white-space: nowrap;
+    padding: 0.65rem 1.1rem;
+}
+
+.ask-ai-controls-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.ask-ai-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+}
+
+.ask-ai-chip {
+    background: var(--background-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 0.25rem 0.7rem;
+    font-size: 0.78rem;
+    cursor: pointer;
+    transition: var(--transition);
+}
+
+.ask-ai-chip:hover {
+    border-color: var(--secondary-color);
+    color: var(--text-color);
+}
+
+.ask-ai-exclude-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+    user-select: none;
+}
+
+.ask-ai-exclude-label input[type="checkbox"] {
+    accent-color: var(--secondary-color);
+    cursor: pointer;
+}
+
+.ask-ai-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.45rem;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.ask-ai-filter-pill {
+    background: rgba(76, 175, 80, 0.12);
+    border: 1px solid rgba(76, 175, 80, 0.35);
+    color: var(--text-color);
+    padding: 0.18rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.76rem;
+}
+
+.ask-ai-relaxed-note {
+    color: #f39c12;
+    font-size: 0.78rem;
+}
+
+.ask-ai-results {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 0.75rem;
+}
+
+.ask-ai-results:empty {
+    display: none;
+}
+
+.ask-ai-loading,
+.ask-ai-error,
+.ask-ai-empty {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.55rem;
+    padding: 1rem;
+    border-radius: 8px;
+    background: var(--background-color);
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
+
+.ask-ai-error {
+    color: #e74c3c;
+}
+
+.ask-ai-card {
+    display: flex;
+    gap: 0.7rem;
+    background: var(--background-color);
+    border: 1px solid var(--border-color);
+    border-radius: 10px;
+    padding: 0.55rem;
+    cursor: pointer;
+    transition: transform 0.15s ease, border-color 0.15s ease;
+    min-width: 0;
+}
+
+.ask-ai-card:hover {
+    transform: translateY(-2px);
+    border-color: var(--secondary-color);
+}
+
+.ask-ai-card img {
+    width: 64px;
+    height: 96px;
+    object-fit: cover;
+    border-radius: 6px;
+    flex-shrink: 0;
+}
+
+.ask-ai-card-body {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    min-width: 0;
+    flex: 1;
+}
+
+.ask-ai-card-title {
+    font-size: 0.88rem;
+    font-weight: 600;
+    color: var(--text-color);
+    line-height: 1.25;
+}
+
+.ask-ai-card-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.45rem;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+}
+
+.ask-ai-match {
+    color: var(--secondary-color);
+    font-weight: 700;
+}
+
+.ask-ai-card-genres {
+    font-size: 0.72rem;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ask-ai-reason {
+    font-size: 0.76rem;
+    color: var(--text-secondary);
+    line-height: 1.3;
+    margin: 0.15rem 0 0;
+}
+
+@media (max-width: 600px) {
+    .ask-ai-input-row {
+        flex-direction: column;
+    }
+    .ask-ai-submit {
+        justify-content: center;
     }
 }

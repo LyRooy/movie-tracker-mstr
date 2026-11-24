@@ -288,7 +288,11 @@ class DatabaseManager:
                             IFNULL(director, '') AS director,
                             IFNULL("cast", '') AS cast_members,
                             IFNULL(tagline, '') AS tagline,
-                            COALESCE(NULLIF(overview, ''), description, '') AS overview
+                            COALESCE(NULLIF(overview, ''), description, '') AS overview,
+                            poster_path,
+                            poster_url,
+                            imdb_rating,
+                            popularity
                         FROM movies
                         WHERE id IN ({placeholders})
                         """,
@@ -301,6 +305,87 @@ class DatabaseManager:
         except Exception as e:
             print(f"Błąd odczytu metadanych filmów po ID: {e}")
         return result
+
+    def filter_movie_ids_by_criteria(self, filters: dict) -> list[int] | None:
+        """Filtruje ID filmów/seriali w movies.db wg twardych filtrów SQL; None gdy brak filtrów."""
+        if not isinstance(filters, dict) or not os.path.exists(self.local_db_path):
+            return None
+
+        clauses: list[str] = []
+        params: list = []
+
+        director = str(filters.get("director") or "").strip().lower()
+        if director:
+            clauses.append("LOWER(IFNULL(director, '')) LIKE ?")
+            params.append(f"%{director}%")
+
+        raw_cast = filters.get("cast")
+        cast_list = (
+            raw_cast
+            if isinstance(raw_cast, list)
+            else ([raw_cast] if isinstance(raw_cast, str) else [])
+        )
+        for actor in cast_list:
+            clean_actor = str(actor or "").strip().lower()
+            if clean_actor:
+                clauses.append('LOWER(IFNULL("cast", \'\')) LIKE ?')
+                params.append(f"%{clean_actor}%")
+
+        raw_genres = filters.get("genres")
+        genres_list = (
+            raw_genres
+            if isinstance(raw_genres, list)
+            else ([g for g in str(raw_genres).split(",")] if isinstance(raw_genres, str) else [])
+        )
+        for g in genres_list:
+            clean_genre = str(g or "").strip().lower()
+            if clean_genre:
+                clauses.append("LOWER(COALESCE(NULLIF(genres, ''), genre, '')) LIKE ?")
+                params.append(f"%{clean_genre}%")
+
+        year_from = filters.get("year_from")
+        if year_from is not None:
+            try:
+                clauses.append("length(IFNULL(release_date, '')) >= 4 AND CAST(substr(release_date, 1, 4) AS INTEGER) >= ?")
+                params.append(int(year_from))
+            except (TypeError, ValueError):
+                pass
+
+        year_to = filters.get("year_to")
+        if year_to is not None:
+            try:
+                clauses.append("length(IFNULL(release_date, '')) >= 4 AND CAST(substr(release_date, 1, 4) AS INTEGER) <= ?")
+                params.append(int(year_to))
+            except (TypeError, ValueError):
+                pass
+
+        media_type = str(filters.get("media_type") or "").strip().lower()
+        if media_type in ("movie", "series"):
+            clauses.append("media_type = ?")
+            params.append(media_type)
+
+        min_rating = filters.get("min_rating")
+        if min_rating is not None:
+            try:
+                clauses.append("COALESCE(imdb_rating, vote_average, 0) >= ?")
+                params.append(float(min_rating))
+            except (TypeError, ValueError):
+                pass
+
+        if not clauses:
+            return None
+
+        where_sql = " AND ".join(clauses)
+        try:
+            conn = sqlite3.connect(self.local_db_path)
+            try:
+                rows = conn.execute(f"SELECT id FROM movies WHERE {where_sql}", params).fetchall()
+                return [int(r[0]) for r in rows]
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Błąd filtrowania movies.db: {e}")
+            return None
 
     def fetch_movies_metadata(self):
         if not os.path.exists(self.local_db_path):

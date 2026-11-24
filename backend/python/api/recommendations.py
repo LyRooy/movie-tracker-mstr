@@ -1,6 +1,7 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import BaseModel, Field
 from surprise import Dataset, Reader
 from sklearn.metrics.pairwise import cosine_similarity
 
@@ -393,3 +394,105 @@ def get_recommendations(user_id: int):
 @router.post("/{user_id}/recommendations/force-recalculate", dependencies=[Depends(verify_api_key)])
 def force_recalculate(user_id: int):
     return compute_recommendations(user_id, force=True)
+
+
+class AskAIRequest(BaseModel):
+    prompt: str = Field(..., min_length=2, max_length=500)
+    limit: int = Field(8, ge=1, le=20)
+    exclude_watched: bool = True
+    include_explanations: bool = True
+
+
+@router.post("/{user_id}/ask-ai", dependencies=[Depends(verify_api_key)])
+def ask_ai(user_id: int, body: AskAIRequest):
+    """Interaktywny tryb 'Zapytaj AI': filtry SQL z LLM + retrieval wektorowy wyłącznie na movies.db."""
+    prompt = body.prompt.strip()
+    if len(prompt) < 2:
+        raise HTTPException(status_code=400, detail="Zapytanie jest zbyt krótkie.")
+
+    if llm_recommender.embeddings is None:
+        llm_recommender.load_index()
+    if llm_recommender.embeddings is None:
+        raise HTTPException(status_code=503, detail="Indeks wektorowy filmów jest niedostępny.")
+
+    tracker.log("llm", "ASK-AI", f"Zapytaj AI (user_id={user_id}): {prompt!r}")
+
+    parsed = llm_recommender.parse_ask_ai_prompt(prompt)
+    filters = parsed.get("filters") or {}
+    semantic_query = parsed.get("semantic_query") or prompt
+
+    exclude_ids: set[int] = set()
+    if body.exclude_watched:
+        exclude_ids.update(int(m) for m in db.fetch_watched_movies(user_id))
+        user_ratings = db.fetch_user_ratings(user_id)
+        if user_ratings is not None and not user_ratings.empty:
+            exclude_ids.update(int(m) for m in user_ratings["movie_id"].tolist())
+
+    candidate_ids = db.filter_movie_ids_by_criteria(filters)
+    query_vecs = llm_recommender.embed_queries([semantic_query])
+    matches = llm_recommender.search_within_candidates(
+        query_vecs, candidate_ids, exclude_ids=exclude_ids, top_k=body.limit
+    )
+
+    relaxed_filters = False
+    if not matches and candidate_ids is not None:
+        relaxed_filters = True
+        matches = llm_recommender.search_within_candidates(
+            query_vecs, None, exclude_ids=exclude_ids, top_k=body.limit
+        )
+
+    matched_ids = [mid for _, mid in matches]
+    movies_by_id = db.fetch_movies_by_ids(matched_ids)
+    hydrated_movies = [movies_by_id[mid] for mid in matched_ids if mid in movies_by_id]
+
+    explanations: dict[int, str] = {}
+    if body.include_explanations and hydrated_movies:
+        explanations = llm_recommender.generate_ask_ai_explanations(prompt, hydrated_movies)
+
+    results = []
+    for score, mid in matches:
+        movie = movies_by_id.get(mid)
+        if not movie:
+            continue
+        poster = movie.get("poster_path") or movie.get("poster_url")
+        if poster and not str(poster).startswith("http"):
+            poster = f"https://image.tmdb.org/t/p/w200{poster}"
+        elif not poster:
+            title_q = str(movie.get("title") or "?").replace(" ", "+")
+            poster = f"https://placehold.co/200x300/4CAF50/white/png?text={title_q}"
+
+        results.append(
+            {
+                "id": mid,
+                "title": movie.get("title"),
+                "media_type": movie.get("media_type") or "movie",
+                "release_date": movie.get("release_date"),
+                "genre": movie.get("genres") or "",
+                "overview": movie.get("overview") or "",
+                "cast": movie.get("cast_members") or "",
+                "director": movie.get("director") or "",
+                "poster_path": movie.get("poster_path") or movie.get("poster_url"),
+                "poster_url": poster,
+                "imdb_rating": movie.get("imdb_rating"),
+                "popularity": movie.get("popularity"),
+                "match_score": round(max(0.0, float(score)), 4),
+                "ai_reason": explanations.get(mid, ""),
+            }
+        )
+
+    tracker.log(
+        "llm",
+        "ASK-AI",
+        f"Zwrócono {len(results)} wyników dla user_id={user_id} | filtry={filters} | relaxed={relaxed_filters}",
+    )
+
+    return {
+        "status": "success",
+        "user_id": user_id,
+        "prompt": prompt,
+        "parsed_filters": filters,
+        "semantic_query": semantic_query,
+        "relaxed_filters": relaxed_filters,
+        "count": len(results),
+        "results": results,
+    }

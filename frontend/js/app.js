@@ -21,6 +21,7 @@ class MovieTracker {
         this._lastRecUpdatedAt = null;
         this._isRecalculating = false;
         this._recalcQueued = false;
+        this._askAiLoading = false;
         this._showRecModels = localStorage.getItem('admin_show_rec_models') === '1';
         
         // Właściwości kalendarza
@@ -212,6 +213,23 @@ class MovieTracker {
                 this.performSearch();
             });
         }
+
+        // Tryb "Zapytaj AI" na dashboardzie
+        const askAiForm = document.getElementById('ask-ai-form');
+        if (askAiForm) {
+            askAiForm.addEventListener('submit', (e) => {
+                e.preventDefault();
+                this.submitAskAI();
+            });
+        }
+        document.querySelectorAll('.ask-ai-chip').forEach((chip) => {
+            chip.addEventListener('click', () => {
+                const promptText = chip.dataset.prompt || chip.textContent.trim();
+                const input = document.getElementById('ask-ai-input');
+                if (input) input.value = promptText;
+                this.submitAskAI(promptText);
+            });
+        });
 
         // Zdarzenia modalne - obsłuż przycisk zamykający w modalu filmu
         document.querySelectorAll('#movie-modal .close').forEach(btn => {
@@ -2693,6 +2711,122 @@ class MovieTracker {
         // renderForYou zajmie się wyświetleniem odpowiedniego placeholdera 
         // (czy "Czekam na Twój ruch", czy "Przeliczam...") na podstawie liczby ocen.
         this.renderForYou(data.results || [], status);
+    }
+
+    // ============= TRYB "ZAPYTAJ AI" NA DASHBOARDZIE =============
+    async submitAskAI(customPrompt = null) {
+        if (!this.currentUser || this._askAiLoading) return;
+
+        const input = document.getElementById('ask-ai-input');
+        const submitBtn = document.getElementById('ask-ai-submit');
+        const excludeBox = document.getElementById('ask-ai-exclude-watched');
+        const metaEl = document.getElementById('ask-ai-meta');
+        const resultsEl = document.getElementById('ask-ai-results');
+        if (!resultsEl) return;
+
+        const prompt = (customPrompt !== null ? customPrompt : (input ? input.value : '')).trim();
+        if (prompt.length < 2) {
+            this.showNotification('Wpisz pytanie dla AI (min. 2 znaki).', 'info');
+            return;
+        }
+
+        this._askAiLoading = true;
+        if (submitBtn) submitBtn.disabled = true;
+        if (metaEl) {
+            metaEl.style.display = 'none';
+            metaEl.innerHTML = '';
+        }
+        resultsEl.innerHTML = '<div class="ask-ai-loading"><span class="rec-spinner" aria-hidden="true"></span><span>Analizuję pytanie i przeszukuję bazę filmów...</span></div>';
+
+        try {
+            const response = await fetch('/api/movies/ask-ai', {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+                body: JSON.stringify({
+                    prompt,
+                    limit: 8,
+                    exclude_watched: excludeBox ? excludeBox.checked : true,
+                    include_explanations: true
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok) {
+                throw new Error(data.error || `Błąd serwera (${response.status})`);
+            }
+
+            this.renderAskAIResults(data);
+        } catch (e) {
+            console.error('Ask AI error:', e);
+            resultsEl.innerHTML = `<div class="ask-ai-error"><i class="fas fa-exclamation-triangle"></i><span>${this.escapeHtml(e.message || 'Nie udało się pobrać odpowiedzi AI.')}</span></div>`;
+        } finally {
+            this._askAiLoading = false;
+            if (submitBtn) submitBtn.disabled = false;
+        }
+    }
+
+    renderAskAIResults(data) {
+        const metaEl = document.getElementById('ask-ai-meta');
+        const resultsEl = document.getElementById('ask-ai-results');
+        if (!resultsEl) return;
+
+        if (metaEl) {
+            const pills = [];
+            const f = data.parsed_filters || {};
+            if (f.director) pills.push(`Reżyser: ${f.director}`);
+            if (Array.isArray(f.cast) && f.cast.length) pills.push(`Obsada: ${f.cast.join(', ')}`);
+            if (Array.isArray(f.genres) && f.genres.length) pills.push(`Gatunki: ${f.genres.join(', ')}`);
+            if (f.year_from || f.year_to) pills.push(`Lata: ${f.year_from || '...'}–${f.year_to || '...'}`);
+            if (f.media_type) pills.push(f.media_type === 'series' ? 'Typ: Serial' : 'Typ: Film');
+            if (f.min_rating) pills.push(`IMDb ≥ ${f.min_rating}`);
+
+            if (pills.length || data.relaxed_filters) {
+                const pillsHtml = pills.map(p => `<span class="ask-ai-filter-pill">${this.escapeHtml(p)}</span>`).join('');
+                const relaxedHtml = data.relaxed_filters
+                    ? '<span class="ask-ai-relaxed-note">Brak dokładnych wyników dla wszystkich filtrów — pokazano najbliższe dopasowania semantyczne.</span>'
+                    : '';
+                metaEl.innerHTML = `<span>Filtry:</span>${pillsHtml}${relaxedHtml}`;
+                metaEl.style.display = 'flex';
+            } else {
+                metaEl.style.display = 'none';
+            }
+        }
+
+        const movies = data.results || [];
+        resultsEl.innerHTML = '';
+        if (!movies.length) {
+            resultsEl.innerHTML = '<div class="ask-ai-empty">Nie znaleziono pasujących tytułów w bazie. Spróbuj inaczej opisać czego szukasz.</div>';
+            return;
+        }
+
+        movies.forEach((m) => {
+            const card = document.createElement('div');
+            card.className = 'ask-ai-card';
+            const poster = this.getPosterUrl(m);
+            const year = (m.release_date || '').slice(0, 4);
+            const matchPct = m.match_score != null ? `${Math.round(Number(m.match_score) * 100)}%` : '';
+            const imdb = m.imdb_rating != null ? `<span>⭐ ${parseFloat(m.imdb_rating).toFixed(1)}</span>` : '';
+            const reasonHtml = m.ai_reason ? `<p class="ask-ai-reason">${this.escapeHtml(m.ai_reason)}</p>` : '';
+
+            card.innerHTML = `
+                <img src="${poster}" alt="${this.escapeHtml(m.title || '')}" loading="lazy">
+                <div class="ask-ai-card-body">
+                    <div class="ask-ai-card-title">${this.escapeHtml(m.title || '')}${year ? ` (${this.escapeHtml(year)})` : ''}</div>
+                    <div class="ask-ai-card-meta">
+                        ${matchPct ? `<span class="ask-ai-match">Dopasowanie: ${matchPct}</span>` : ''}
+                        ${imdb}
+                    </div>
+                    ${m.genre ? `<div class="ask-ai-card-genres">${this.escapeHtml(m.genre)}</div>` : ''}
+                    ${reasonHtml}
+                </div>
+            `;
+
+            card.addEventListener('click', () => {
+                const watched = this.watchedMovies.find(w => w.id === m.id || w.movie_id === m.id);
+                this.openMovieModal(watched || m, false);
+            });
+            resultsEl.appendChild(card);
+        });
     }
 
     formatRecTypeBadge(recType) {

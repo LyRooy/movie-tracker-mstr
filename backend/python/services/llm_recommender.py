@@ -212,12 +212,20 @@ class LLMVectorRecommender:
         return "\n\n".join(sections)
 
     @staticmethod
-    def _parse_queries_from_text(text: str) -> list[str]:
-        """Wyciąga listę zapytań z odpowiedzi LLM (odporne na bloki <think> i markdown)."""
+    @staticmethod
+    def _strip_llm_wrapper(text: str) -> str:
+        """Usuwa bloki <think>...</think> (Qwen) oraz znaczniki markdown wokół JSON."""
         if not text:
-            return []
+            return ""
         cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
-        cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+        return re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE).strip()
+
+    @classmethod
+    def _extract_json_from_text(cls, text: str):
+        """Parsuje obiekt lub tablicę JSON z surowej odpowiedzi LLM."""
+        cleaned = cls._strip_llm_wrapper(text)
+        if not cleaned:
+            return None
 
         candidates_to_try = [cleaned]
         obj_match = re.search(r"\{.*\}", cleaned, flags=re.DOTALL)
@@ -229,21 +237,86 @@ class LLMVectorRecommender:
 
         for candidate in candidates_to_try:
             try:
-                parsed = json.loads(candidate)
+                return json.loads(candidate)
             except Exception:
                 continue
-            raw_list = parsed.get("queries") if isinstance(parsed, dict) else parsed
-            if not isinstance(raw_list, list):
-                continue
-            unique_queries = []
-            for item in raw_list:
-                q = str(item).strip()
-                if q and q not in unique_queries:
-                    unique_queries.append(q)
-            if unique_queries:
-                return unique_queries[:5]
+        return None
 
-        return []
+    @classmethod
+    def _parse_queries_from_text(cls, text: str) -> list[str]:
+        """Wyciąga listę zapytań z odpowiedzi LLM (odporne na bloki <think> i markdown)."""
+        parsed = cls._extract_json_from_text(text)
+        if parsed is None:
+            return []
+        raw_list = parsed.get("queries") if isinstance(parsed, dict) else parsed
+        if not isinstance(raw_list, list):
+            return []
+        unique_queries = []
+        for item in raw_list:
+            q = str(item).strip()
+            if q and q not in unique_queries:
+                unique_queries.append(q)
+        return unique_queries[:5]
+
+    def _chat_json(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.2,
+        max_tokens: int = 512,
+        timeout: int = 45,
+    ):
+        """Wywołuje chat Ollamy z wymuszeniem JSON (z fallbackiem bez response_format)."""
+        base_payload = {
+            "model": self.chat_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        for use_json_format in (True, False):
+            payload = dict(base_payload)
+            if use_json_format:
+                payload["response_format"] = {"type": "json_object"}
+            try:
+                res = requests.post(
+                    f"{self.v1_url}/chat/completions",
+                    json=payload,
+                    timeout=timeout,
+                )
+                if res.status_code == 400 and use_json_format:
+                    continue
+                if res.status_code != 200:
+                    raise RuntimeError(f"HTTP {res.status_code}: {res.text[:200]}")
+
+                content = (
+                    (res.json().get("choices") or [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                )
+                parsed = self._extract_json_from_text(content)
+                if parsed is not None:
+                    return parsed
+                raise ValueError("Odpowiedź LLM nie zawierała poprawnego JSON.")
+            except Exception as e:
+                if use_json_format and not isinstance(e, ValueError):
+                    tracker.log(
+                        "llm",
+                        "LLM",
+                        f"Błąd połączenia z chatem Ollama ({self.chat_model}): {e}",
+                        level="warning",
+                    )
+                    break
+                if not use_json_format:
+                    tracker.log(
+                        "llm",
+                        "LLM",
+                        f"Nie udało się sparsować JSON z {self.chat_model}: {e}",
+                        level="warning",
+                    )
+        return None
 
     def _build_fallback_queries(
         self,
@@ -297,60 +370,164 @@ class LLMVectorRecommender:
             "this user would love next. Do NOT mention specific movie titles from the user's history. "
             'Return ONLY valid JSON: {"queries": ["query 1", "query 2", "query 3", "query 4"]}.'
         )
-        base_payload = {
-            "model": self.chat_model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": profile_text},
-            ],
-            "temperature": 0.3,
-            "max_tokens": 512,
-        }
-
-        for use_json_format in (True, False):
-            payload = dict(base_payload)
-            if use_json_format:
-                payload["response_format"] = {"type": "json_object"}
-            try:
-                res = requests.post(
-                    f"{self.v1_url}/chat/completions",
-                    json=payload,
-                    timeout=45,
-                )
-                if res.status_code == 400 and use_json_format:
-                    continue
-                if res.status_code != 200:
-                    raise RuntimeError(f"HTTP {res.status_code}: {res.text[:200]}")
-
-                content = (
-                    (res.json().get("choices") or [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                )
-                queries = self._parse_queries_from_text(content)
+        parsed = self._chat_json(system_prompt, profile_text, temperature=0.3, max_tokens=512, timeout=45)
+        if parsed is not None:
+            raw_list = parsed.get("queries") if isinstance(parsed, dict) else parsed
+            if isinstance(raw_list, list):
+                queries = []
+                for item in raw_list:
+                    q = str(item).strip()
+                    if q and q not in queries:
+                        queries.append(q)
                 if queries:
-                    return queries, self.chat_model
-                raise ValueError("Odpowiedź LLM nie zawierała poprawnej listy zapytań JSON.")
-            except Exception as e:
-                if use_json_format:
-                    # Jeśli to błąd sieci/timeout lub brak odpowiedzi, nie ma sensu ponawiać bez json_object.
-                    if not isinstance(e, ValueError):
-                        tracker.log(
-                            "llm",
-                            "LLM",
-                            f"Błąd połączenia z chatem Ollama ({self.chat_model}), używam zapytań zastępczych: {e}",
-                            level="warning",
-                        )
-                        break
-                else:
-                    tracker.log(
-                        "llm",
-                        "LLM",
-                        f"Nie udało się sparsować zapytań z {self.chat_model}, używam fallbacku: {e}",
-                        level="warning",
-                    )
+                    return queries[:5], self.chat_model
 
         return self._build_fallback_queries(user_ratings, onboarding_ids, movies_by_id), "fallback"
+
+    @staticmethod
+    def _sanitize_ask_ai_filters(raw_filters) -> dict:
+        """Normalizuje wyekstrahowane filtry SQL do bezpiecznych typów."""
+        if not isinstance(raw_filters, dict):
+            return {}
+        clean: dict = {}
+
+        director = str(raw_filters.get("director") or "").strip()
+        if director:
+            clean["director"] = director
+
+        raw_cast = raw_filters.get("cast")
+        if isinstance(raw_cast, list):
+            cast_list = [str(x).strip() for x in raw_cast if str(x or "").strip()]
+            if cast_list:
+                clean["cast"] = cast_list[:3]
+        elif isinstance(raw_cast, str) and raw_cast.strip():
+            clean["cast"] = [raw_cast.strip()]
+
+        raw_genres = raw_filters.get("genres")
+        if isinstance(raw_genres, list):
+            genres = [str(g).strip() for g in raw_genres if str(g or "").strip()]
+            if genres:
+                clean["genres"] = genres[:4]
+        elif isinstance(raw_genres, str) and raw_genres.strip():
+            clean["genres"] = [g.strip() for g in raw_genres.split(",") if g.strip()][:4]
+
+        for key in ("year_from", "year_to"):
+            val = raw_filters.get(key)
+            if val is not None and val != "":
+                try:
+                    yr = int(val)
+                    if 1900 <= yr <= 2100:
+                        clean[key] = yr
+                except (TypeError, ValueError):
+                    pass
+
+        media_type = str(raw_filters.get("media_type") or "").strip().lower()
+        if media_type in ("movie", "series"):
+            clean["media_type"] = media_type
+
+        min_rating = raw_filters.get("min_rating")
+        if min_rating is not None and min_rating != "":
+            try:
+                mr = float(min_rating)
+                if 0.0 < mr <= 10.0:
+                    clean["min_rating"] = mr
+            except (TypeError, ValueError):
+                pass
+
+        return clean
+
+    def parse_ask_ai_prompt(self, prompt: str) -> dict:
+        """Zamienia zapytanie użytkownika (PL/EN) na twarde filtry SQL + opis semantyczny pod wektory."""
+        clean_prompt = (prompt or "").strip()
+        system_prompt = (
+            "You parse a user's movie/TV request (in Polish or English) into structured SQL filters "
+            "and an English semantic search query for a TMDB movie database. "
+            "Extract ONLY hard constraints explicitly mentioned by the user into `filters`: "
+            "- `director`: string or null (person's name)\n"
+            "- `cast`: array of actor names or null\n"
+            "- `genres`: array of English TMDB genres (e.g. Thriller, Drama, Comedy, Sci-Fi, Science Fiction, Horror, Crime, Mystery, Romance, Action, Adventure, Animation, Fantasy, Documentary) or null\n"
+            "- `year_from`: integer year or null (e.g. 'po 2010' -> 2011 or 2010, 'lata 90' -> 1990)\n"
+            "- `year_to`: integer year or null (e.g. 'lata 90' -> 1999)\n"
+            "- `media_type`: 'movie' or 'series' or null\n"
+            "- `min_rating`: float (IMDb 1-10) or null\n"
+            "Also write `semantic_query`: a rich English descriptive sentence capturing the mood, plot, setting, and vibe the user wants. "
+            'Return ONLY valid JSON: {"filters": {...}, "semantic_query": "..."}.'
+        )
+        parsed = self._chat_json(system_prompt, clean_prompt, temperature=0.1, max_tokens=400, timeout=35)
+        if isinstance(parsed, dict):
+            filters = self._sanitize_ask_ai_filters(parsed.get("filters"))
+            semantic_query = str(parsed.get("semantic_query") or "").strip() or clean_prompt
+            return {"filters": filters, "semantic_query": semantic_query, "source": self.chat_model}
+
+        return {"filters": {}, "semantic_query": clean_prompt, "source": "fallback"}
+
+    def search_within_candidates(
+        self,
+        query_vecs: np.ndarray,
+        candidate_ids: list[int] | None,
+        exclude_ids: set[int],
+        top_k: int = 8,
+    ) -> list[tuple[float, int]]:
+        """Wyszukuje top_k filmów w całym indeksie lub wyłącznie wśród kandydatów z filtrów SQL."""
+        if candidate_ids is None:
+            return self.search_by_query_vectors(query_vecs, exclude_ids=exclude_ids, top_k=top_k)
+
+        if self.embeddings is None or self.active_count <= 0 or not candidate_ids:
+            return []
+
+        filtered_ids = [
+            int(mid)
+            for mid in candidate_ids
+            if int(mid) not in exclude_ids and int(mid) in self.id_to_row
+        ]
+        if not filtered_ids:
+            return []
+
+        scores_map = self.score_movie_ids(query_vecs, filtered_ids)
+        scored = sorted(
+            ((score, mid) for mid, score in scores_map.items()),
+            key=lambda item: (-item[0], item[1]),
+        )
+        return scored[: max(1, int(top_k))]
+
+    def generate_ask_ai_explanations(self, user_prompt: str, movies: list[dict]) -> dict[int, str]:
+        """Generuje krótkie (1-zdaniowe) polskie uzasadnienia dla już wybranych filmów z movies.db."""
+        if not movies:
+            return {}
+
+        movie_lines = []
+        for m in movies:
+            year = (m.get("release_date") or "")[:4]
+            overview = (m.get("overview") or "").strip()[:240]
+            movie_lines.append(
+                f"- id={m['id']} | title={m.get('title')} ({year}) | "
+                f"genres={m.get('genres') or '-'} | director={m.get('director') or '-'} | "
+                f"overview={overview}"
+            )
+
+        system_prompt = (
+            "Jesteś asystentem filmowym. Dla podanych filmów napisz po JEDNYM krótkim, naturalnym zdaniu po polsku, "
+            "dlaczego pasują do zapytania użytkownika. Opieraj się wyłącznie na podanych faktach, nie zmyślaj szczegółów. "
+            'Zwróć WYŁĄCZNIE JSON: {"explanations": {"<id>": "krótkie zdanie po polsku"}}.'
+        )
+        user_msg = f"Zapytanie użytkownika: {user_prompt}\n\nWybrane filmy:\n" + "\n".join(movie_lines)
+        parsed = self._chat_json(system_prompt, user_msg, temperature=0.2, max_tokens=600, timeout=35)
+        if not isinstance(parsed, dict):
+            return {}
+        raw_exp = parsed.get("explanations")
+        if not isinstance(raw_exp, dict):
+            return {}
+
+        out: dict[int, str] = {}
+        for k, v in raw_exp.items():
+            try:
+                mid = int(k)
+            except (TypeError, ValueError):
+                continue
+            text = str(v or "").strip()
+            if text:
+                out[mid] = text
+        return out
 
     def embed_queries(self, queries: list[str]) -> np.ndarray:
         """Zamienia listę zapytań tekstowych na znormalizowane wektory przez endpoint embeddingów Ollamy."""

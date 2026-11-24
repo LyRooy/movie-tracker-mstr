@@ -131,6 +131,46 @@
                     </div>
                 </div>
 
+                <!-- PRAWA KOLUMNA: tryb "Zapytaj AI" -->
+                <div class="ask-ai-section">
+                    <div class="ask-ai-header">
+                        <div class="ask-ai-title-wrap">
+                            <h2><i class="fas fa-magic"></i> Zapytaj AI</h2>
+                            <span class="ask-ai-subtitle">Opisz nastrój, reżysera, gatunek lub lata premiery — wyszukamy wyłącznie z naszej bazy</span>
+                        </div>
+                    </div>
+
+                    <form id="ask-ai-form" class="ask-ai-form">
+                        <div class="ask-ai-input-row">
+                            <input
+                                type="text"
+                                id="ask-ai-input"
+                                maxlength="500"
+                                placeholder="np. Mroczny thriller od Christophera Nolana po 2010 albo coś lekkiego na letni wieczór..."
+                                autocomplete="off"
+                            >
+                            <button type="submit" id="ask-ai-submit" class="btn btn-primary ask-ai-submit">
+                                <i class="fas fa-paper-plane"></i>
+                                <span>Zapytaj AI</span>
+                            </button>
+                        </div>
+                        <div class="ask-ai-controls-row">
+                            <div class="ask-ai-chips">
+                                <button type="button" class="ask-ai-chip" data-prompt="Thriller od Christophera Nolana">Thriller od Christophera Nolana</button>
+                                <button type="button" class="ask-ai-chip" data-prompt="Coś lekkiego i ciepłego na letnie wieczory">Coś na letnie wieczory</button>
+                                <button type="button" class="ask-ai-chip" data-prompt="Sci-fi z twistem fabularnym po 2015">Sci-fi z twistem po 2015</button>
+                            </div>
+                            <label class="ask-ai-exclude-label">
+                                <input type="checkbox" id="ask-ai-exclude-watched" checked>
+                                <span>Pomiń obejrzane</span>
+                            </label>
+                        </div>
+                    </form>
+
+                    <div id="ask-ai-meta" class="ask-ai-meta" style="display: none;"></div>
+                    <div id="ask-ai-results" class="ask-ai-results"></div>
+                </div>
+
                 <!-- PRAWA KOLUMNA: top lista -->
                 <div class="dashboard-top-movies">
                     <div class="top-movies-header">
