@@ -44,6 +44,8 @@ class MovieTracker {
         
         this.bindEvents();
         this.loadUserData();
+        const askWidget = document.getElementById('ask-ai-widget');
+        if (askWidget) askWidget.style.display = 'block';
         await this.generateCalendar();
         await this.loadMoviesData();
         this.setupTheme();
@@ -214,21 +216,43 @@ class MovieTracker {
             });
         }
 
-        // Tryb "Zapytaj AI" na dashboardzie
+        // Rozwijany czat "Zapytaj AI" w prawym dolnym rogu
+        const askAiFab = document.getElementById('ask-ai-fab');
+        const askAiClose = document.getElementById('ask-ai-close');
+        const askAiClear = document.getElementById('ask-ai-clear');
         const askAiForm = document.getElementById('ask-ai-form');
+        const askAiMessages = document.getElementById('ask-ai-messages');
+
+        if (askAiFab) {
+            askAiFab.addEventListener('click', () => this.toggleAskAIDrawer());
+        }
+        if (askAiClose) {
+            askAiClose.addEventListener('click', () => this.toggleAskAIDrawer(false));
+        }
+        if (askAiClear) {
+            askAiClear.addEventListener('click', () => this.resetAskAIChat());
+        }
         if (askAiForm) {
             askAiForm.addEventListener('submit', (e) => {
                 e.preventDefault();
                 this.submitAskAI();
             });
         }
-        document.querySelectorAll('.ask-ai-chip').forEach((chip) => {
-            chip.addEventListener('click', () => {
+        if (askAiMessages) {
+            askAiMessages.addEventListener('click', (e) => {
+                const chip = e.target.closest('.ask-ai-chip');
+                if (!chip) return;
                 const promptText = chip.dataset.prompt || chip.textContent.trim();
-                const input = document.getElementById('ask-ai-input');
-                if (input) input.value = promptText;
                 this.submitAskAI(promptText);
             });
+        }
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                const drawer = document.getElementById('ask-ai-drawer');
+                if (drawer && !drawer.hidden) {
+                    this.toggleAskAIDrawer(false);
+                }
+            }
         });
 
         // Zdarzenia modalne - obsłuż przycisk zamykający w modalu filmu
@@ -2713,16 +2737,50 @@ class MovieTracker {
         this.renderForYou(data.results || [], status);
     }
 
-    // ============= TRYB "ZAPYTAJ AI" NA DASHBOARDZIE =============
+    // ============= ROZWIJANY CZAT "ZAPYTAJ AI" =============
+    toggleAskAIDrawer(forceState = null) {
+        const drawer = document.getElementById('ask-ai-drawer');
+        const fab = document.getElementById('ask-ai-fab');
+        if (!drawer || !fab) return;
+
+        const shouldOpen = forceState !== null ? Boolean(forceState) : drawer.hidden;
+        drawer.hidden = !shouldOpen;
+        fab.classList.toggle('is-open', shouldOpen);
+        fab.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
+        fab.innerHTML = shouldOpen
+            ? '<i class="fas fa-chevron-down"></i>'
+            : '<i class="fas fa-magic"></i>';
+
+        if (shouldOpen) {
+            const input = document.getElementById('ask-ai-input');
+            if (input) setTimeout(() => input.focus(), 40);
+        }
+    }
+
+    resetAskAIChat() {
+        const messagesEl = document.getElementById('ask-ai-messages');
+        if (!messagesEl) return;
+        messagesEl.innerHTML = `
+            <div id="ask-ai-welcome" class="ask-ai-welcome">
+                <h3>Co chcesz dziś obejrzeć?</h3>
+                <p>Opisz klimat, gatunek, reżysera lub lata premiery.</p>
+                <div class="ask-ai-chips">
+                    <button type="button" class="ask-ai-chip" data-prompt="Thriller od Christophera Nolana">Thriller od Christophera Nolana</button>
+                    <button type="button" class="ask-ai-chip" data-prompt="Coś lekkiego i ciepłego na letnie wieczory">Coś na letnie wieczory</button>
+                    <button type="button" class="ask-ai-chip" data-prompt="Sci-fi z twistem fabularnym po 2015">Sci-fi z twistem po 2015</button>
+                </div>
+            </div>
+        `;
+    }
+
     async submitAskAI(customPrompt = null) {
         if (!this.currentUser || this._askAiLoading) return;
 
         const input = document.getElementById('ask-ai-input');
         const submitBtn = document.getElementById('ask-ai-submit');
         const excludeBox = document.getElementById('ask-ai-exclude-watched');
-        const metaEl = document.getElementById('ask-ai-meta');
-        const resultsEl = document.getElementById('ask-ai-results');
-        if (!resultsEl) return;
+        const messagesEl = document.getElementById('ask-ai-messages');
+        if (!messagesEl) return;
 
         const prompt = (customPrompt !== null ? customPrompt : (input ? input.value : '')).trim();
         if (prompt.length < 2) {
@@ -2730,13 +2788,25 @@ class MovieTracker {
             return;
         }
 
+        this.toggleAskAIDrawer(true);
+
+        const welcomeEl = document.getElementById('ask-ai-welcome');
+        if (welcomeEl) welcomeEl.remove();
+        if (input && customPrompt === null) input.value = '';
+
+        const userMsgEl = document.createElement('div');
+        userMsgEl.className = 'ask-ai-msg-user';
+        userMsgEl.textContent = prompt;
+        messagesEl.appendChild(userMsgEl);
+
+        const botMsgEl = document.createElement('div');
+        botMsgEl.className = 'ask-ai-msg-bot';
+        botMsgEl.innerHTML = '<div class="ask-ai-loading"><span class="rec-spinner" aria-hidden="true"></span><span>Analizuję pytanie i przeszukuję bazę filmów...</span></div>';
+        messagesEl.appendChild(botMsgEl);
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+
         this._askAiLoading = true;
         if (submitBtn) submitBtn.disabled = true;
-        if (metaEl) {
-            metaEl.style.display = 'none';
-            metaEl.innerHTML = '';
-        }
-        resultsEl.innerHTML = '<div class="ask-ai-loading"><span class="rec-spinner" aria-hidden="true"></span><span>Analizuję pytanie i przeszukuję bazę filmów...</span></div>';
 
         try {
             const response = await fetch('/api/movies/ask-ai', {
@@ -2744,7 +2814,7 @@ class MovieTracker {
                 headers: this.getAuthHeaders(),
                 body: JSON.stringify({
                     prompt,
-                    limit: 8,
+                    limit: 6,
                     exclude_watched: excludeBox ? excludeBox.checked : true,
                     include_explanations: true
                 })
@@ -2755,49 +2825,52 @@ class MovieTracker {
                 throw new Error(data.error || `Błąd serwera (${response.status})`);
             }
 
-            this.renderAskAIResults(data);
+            this.renderAskAIResults(data, botMsgEl);
         } catch (e) {
             console.error('Ask AI error:', e);
-            resultsEl.innerHTML = `<div class="ask-ai-error"><i class="fas fa-exclamation-triangle"></i><span>${this.escapeHtml(e.message || 'Nie udało się pobrać odpowiedzi AI.')}</span></div>`;
+            botMsgEl.innerHTML = `<div class="ask-ai-error"><i class="fas fa-exclamation-triangle"></i><span>${this.escapeHtml(e.message || 'Nie udało się pobrać odpowiedzi AI.')}</span></div>`;
         } finally {
             this._askAiLoading = false;
             if (submitBtn) submitBtn.disabled = false;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
         }
     }
 
-    renderAskAIResults(data) {
-        const metaEl = document.getElementById('ask-ai-meta');
-        const resultsEl = document.getElementById('ask-ai-results');
-        if (!resultsEl) return;
+    renderAskAIResults(data, containerEl) {
+        if (!containerEl) return;
+        containerEl.innerHTML = '';
 
-        if (metaEl) {
-            const pills = [];
-            const f = data.parsed_filters || {};
-            if (f.director) pills.push(`Reżyser: ${f.director}`);
-            if (Array.isArray(f.cast) && f.cast.length) pills.push(`Obsada: ${f.cast.join(', ')}`);
-            if (Array.isArray(f.genres) && f.genres.length) pills.push(`Gatunki: ${f.genres.join(', ')}`);
-            if (f.year_from || f.year_to) pills.push(`Lata: ${f.year_from || '...'}–${f.year_to || '...'}`);
-            if (f.media_type) pills.push(f.media_type === 'series' ? 'Typ: Serial' : 'Typ: Film');
-            if (f.min_rating) pills.push(`IMDb ≥ ${f.min_rating}`);
+        const pills = [];
+        const f = data.parsed_filters || {};
+        if (f.director) pills.push(`Reżyser: ${f.director}`);
+        if (Array.isArray(f.cast) && f.cast.length) pills.push(`Obsada: ${f.cast.join(', ')}`);
+        if (Array.isArray(f.genres) && f.genres.length) pills.push(`Gatunki: ${f.genres.join(', ')}`);
+        if (f.year_from || f.year_to) pills.push(`Lata: ${f.year_from || '...'} - ${f.year_to || '...'}`);
+        if (f.media_type) pills.push(f.media_type === 'series' ? 'Typ: Serial' : 'Typ: Film');
+        if (f.min_rating) pills.push(`IMDb >= ${f.min_rating}`);
 
-            if (pills.length || data.relaxed_filters) {
-                const pillsHtml = pills.map(p => `<span class="ask-ai-filter-pill">${this.escapeHtml(p)}</span>`).join('');
-                const relaxedHtml = data.relaxed_filters
-                    ? '<span class="ask-ai-relaxed-note">Brak dokładnych wyników dla wszystkich filtrów — pokazano najbliższe dopasowania semantyczne.</span>'
-                    : '';
-                metaEl.innerHTML = `<span>Filtry:</span>${pillsHtml}${relaxedHtml}`;
-                metaEl.style.display = 'flex';
-            } else {
-                metaEl.style.display = 'none';
-            }
+        if (pills.length || data.relaxed_filters) {
+            const metaEl = document.createElement('div');
+            metaEl.className = 'ask-ai-meta';
+            const pillsHtml = pills.map(p => `<span class="ask-ai-filter-pill">${this.escapeHtml(p)}</span>`).join('');
+            const relaxedHtml = data.relaxed_filters
+                ? '<span class="ask-ai-relaxed-note">Brak dokładnych wyników dla wszystkich filtrów. Pokazano najbliższe dopasowania semantyczne.</span>'
+                : '';
+            metaEl.innerHTML = `<span>Filtry:</span>${pillsHtml}${relaxedHtml}`;
+            containerEl.appendChild(metaEl);
         }
 
         const movies = data.results || [];
-        resultsEl.innerHTML = '';
         if (!movies.length) {
-            resultsEl.innerHTML = '<div class="ask-ai-empty">Nie znaleziono pasujących tytułów w bazie. Spróbuj inaczej opisać czego szukasz.</div>';
+            const emptyEl = document.createElement('div');
+            emptyEl.className = 'ask-ai-empty';
+            emptyEl.textContent = 'Nie znaleziono pasujących tytułów w bazie. Spróbuj inaczej opisać czego szukasz.';
+            containerEl.appendChild(emptyEl);
             return;
         }
+
+        const listEl = document.createElement('div');
+        listEl.className = 'ask-ai-results-list';
 
         movies.forEach((m) => {
             const card = document.createElement('div');
@@ -2825,8 +2898,10 @@ class MovieTracker {
                 const watched = this.watchedMovies.find(w => w.id === m.id || w.movie_id === m.id);
                 this.openMovieModal(watched || m, false);
             });
-            resultsEl.appendChild(card);
+            listEl.appendChild(card);
         });
+
+        containerEl.appendChild(listEl);
     }
 
     formatRecTypeBadge(recType) {
@@ -5174,6 +5249,8 @@ class MovieTracker {
         if (this.tokenCheckInterval) {
             clearInterval(this.tokenCheckInterval);
         }
+        const askWidget = document.getElementById('ask-ai-widget');
+        if (askWidget) askWidget.style.display = 'none';
         
         // Pokaż powiadomienie o wylogowaniu
         this.showNotification('Wylogowano pomyślnie. Do zobaczenia!', 'success');

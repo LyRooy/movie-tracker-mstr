@@ -131,46 +131,6 @@
                     </div>
                 </div>
 
-                <!-- PRAWA KOLUMNA: tryb "Zapytaj AI" -->
-                <div class="ask-ai-section">
-                    <div class="ask-ai-header">
-                        <div class="ask-ai-title-wrap">
-                            <h2><i class="fas fa-magic"></i> Zapytaj AI</h2>
-                            <span class="ask-ai-subtitle">Opisz nastrój, reżysera, gatunek lub lata premiery — wyszukamy wyłącznie z naszej bazy</span>
-                        </div>
-                    </div>
-
-                    <form id="ask-ai-form" class="ask-ai-form">
-                        <div class="ask-ai-input-row">
-                            <input
-                                type="text"
-                                id="ask-ai-input"
-                                maxlength="500"
-                                placeholder="np. Mroczny thriller od Christophera Nolana po 2010 albo coś lekkiego na letni wieczór..."
-                                autocomplete="off"
-                            >
-                            <button type="submit" id="ask-ai-submit" class="btn btn-primary ask-ai-submit">
-                                <i class="fas fa-paper-plane"></i>
-                                <span>Zapytaj AI</span>
-                            </button>
-                        </div>
-                        <div class="ask-ai-controls-row">
-                            <div class="ask-ai-chips">
-                                <button type="button" class="ask-ai-chip" data-prompt="Thriller od Christophera Nolana">Thriller od Christophera Nolana</button>
-                                <button type="button" class="ask-ai-chip" data-prompt="Coś lekkiego i ciepłego na letnie wieczory">Coś na letnie wieczory</button>
-                                <button type="button" class="ask-ai-chip" data-prompt="Sci-fi z twistem fabularnym po 2015">Sci-fi z twistem po 2015</button>
-                            </div>
-                            <label class="ask-ai-exclude-label">
-                                <input type="checkbox" id="ask-ai-exclude-watched" checked>
-                                <span>Pomiń obejrzane</span>
-                            </label>
-                        </div>
-                    </form>
-
-                    <div id="ask-ai-meta" class="ask-ai-meta" style="display: none;"></div>
-                    <div id="ask-ai-results" class="ask-ai-results"></div>
-                </div>
-
                 <!-- PRAWA KOLUMNA: top lista -->
                 <div class="dashboard-top-movies">
                     <div class="top-movies-header">
@@ -1088,6 +1048,61 @@
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="js/app.js"></script>
+
+    <!-- Rozwijany czat "Zapytaj AI" w prawym dolnym rogu -->
+    <div id="ask-ai-widget" class="ask-ai-widget" style="display: none;">
+        <div id="ask-ai-drawer" class="ask-ai-drawer" role="dialog" aria-label="Czat Zapytaj AI" hidden>
+            <div class="ask-ai-drawer-header">
+                <div class="ask-ai-drawer-title">
+                    <i class="fas fa-magic"></i>
+                    <span>Zapytaj AI</span>
+                </div>
+                <div class="ask-ai-drawer-actions">
+                    <button type="button" id="ask-ai-clear" class="ask-ai-icon-btn" title="Nowa rozmowa" aria-label="Nowa rozmowa">
+                        <i class="fas fa-redo"></i>
+                    </button>
+                    <button type="button" id="ask-ai-close" class="ask-ai-icon-btn" title="Zwiń" aria-label="Zwiń">
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                </div>
+            </div>
+
+            <div id="ask-ai-messages" class="ask-ai-messages">
+                <div id="ask-ai-welcome" class="ask-ai-welcome">
+                    <h3>Co chcesz dziś obejrzeć?</h3>
+                    <p>Opisz klimat, gatunek, reżysera lub lata premiery.</p>
+                    <div class="ask-ai-chips">
+                        <button type="button" class="ask-ai-chip" data-prompt="Thriller od Christophera Nolana">Thriller od Christophera Nolana</button>
+                        <button type="button" class="ask-ai-chip" data-prompt="Coś lekkiego i ciepłego na letnie wieczory">Coś na letnie wieczory</button>
+                        <button type="button" class="ask-ai-chip" data-prompt="Sci-fi z twistem fabularnym po 2015">Sci-fi z twistem po 2015</button>
+                    </div>
+                </div>
+            </div>
+
+            <form id="ask-ai-form" class="ask-ai-composer">
+                <input
+                    type="text"
+                    id="ask-ai-input"
+                    maxlength="500"
+                    placeholder="Zapytaj AI o film lub serial..."
+                    autocomplete="off"
+                >
+                <div class="ask-ai-composer-footer">
+                    <label class="ask-ai-exclude-label">
+                        <input type="checkbox" id="ask-ai-exclude-watched" checked>
+                        <span>Pomiń obejrzane</span>
+                    </label>
+                    <button type="submit" id="ask-ai-submit" class="ask-ai-send-btn" title="Wyślij" aria-label="Wyślij">
+                        <i class="fas fa-arrow-up"></i>
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <button type="button" id="ask-ai-fab" class="ask-ai-fab" aria-expanded="false" aria-controls="ask-ai-drawer" title="Zapytaj AI">
+            <i class="fas fa-magic"></i>
+        </button>
+    </div>
 
     <!-- Stopka -->
     <footer class="site-footer">
