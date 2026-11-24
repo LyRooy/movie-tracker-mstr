@@ -2599,8 +2599,8 @@ class MovieTracker {
         const updatedEl = document.getElementById('for-you-updated-at');
         if (updatedEl) {
             updatedEl.classList.add('is-updating');
-            updatedEl.innerHTML = '<i class="fas fa-sync-alt fa-spin"></i> Aktualizuję rekomendacje...';
-            updatedEl.style.display = 'inline-block';
+            updatedEl.innerHTML = '<span class="rec-spinner" aria-hidden="true"></span><span>Aktualizuję rekomendacje...</span>';
+            updatedEl.style.display = 'inline-flex';
         }
 
         let shouldRestart = false;
