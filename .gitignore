@@ -40,3 +40,8 @@ Thumbs.db
 *.txt
 *.syncthing
 .syncthing*
+
+# Ignoruj zapisane binarne modele AI
+backend/python/models/*.pkl
+backend/python/models/*.pkl.tmp
+backend/python/models/*.joblib

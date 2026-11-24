@@ -30,6 +30,65 @@ class DatabaseManager:
             return pd.DataFrame(rows, columns=["rating", "movie_id"])
         return None
 
+    def fetch_all_ratings(self, batch_size: int = 10000):
+        sql_query = (
+            "SELECT user_id, movie_id, rating "
+            "FROM reviews "
+            "WHERE rating IS NOT NULL "
+            "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC "
+            "LIMIT ? OFFSET ?"
+        )
+        all_rows = []
+        offset = 0
+
+        while True:
+            payload = {"sql": sql_query, "params": [batch_size, offset]}
+            try:
+                res = requests.post(self.endpoint, json=payload, headers=self.headers)
+            except Exception as e:
+                print(f"BŁĄD FETCH ALL D1 (sieć): {e}")
+                return None
+
+            if res.status_code != 200:
+                print(f"BŁĄD FETCH ALL D1 Status: {res.status_code} | Body: {res.text}")
+                return None
+
+            try:
+                res_json = res.json()
+            except Exception as e:
+                print(f"BŁĄD FETCH ALL D1 (JSON): {e}")
+                return None
+
+            if res_json.get("success") is False:
+                print(f"BŁĄD FETCH ALL D1 Body: {res.text}")
+                return None
+
+            data = res_json.get("result", [])
+            rows = data[0].get('results', []) if data and 'results' in data[0] else data
+            if not rows:
+                break
+
+            all_rows.extend(rows)
+            if len(rows) < batch_size:
+                break
+            offset += batch_size
+
+        if not all_rows:
+            return pd.DataFrame(columns=["user_id", "movie_id", "rating"])
+
+        df = pd.DataFrame(all_rows)[["user_id", "movie_id", "rating"]]
+        for col in ("user_id", "movie_id", "rating"):
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        df = df.dropna(subset=["user_id", "movie_id", "rating"])
+        df["user_id"] = df["user_id"].astype(int)
+        df["movie_id"] = df["movie_id"].astype(int)
+        df["rating"] = df["rating"].astype(float)
+
+        # Tabela reviews nie ma UNIQUE(user_id, movie_id), więc zachowujemy najnowszą ocenę dla pary.
+        df = df.drop_duplicates(subset=["user_id", "movie_id"], keep="first").reset_index(drop=True)
+        return df
+
     def fetch_watched_movies(self, user_id: int):
         sql_query = "SELECT movie_id FROM watched WHERE user_id = ?"
         payload = {"sql": sql_query, "params": [user_id]}
@@ -84,6 +143,16 @@ class DatabaseManager:
             rows = data[0].get('results', []) if data else []
             return [{"user_id": r["id"], "nickname": r["nickname"]} for r in rows] if rows else []
         return []
+
+    def get_local_movies_db_signature(self):
+        """Zwraca lekką sygnaturę pliku lokalnej bazy movies.db (rozmiar + mtime_ns)."""
+        if not os.path.exists(self.local_db_path):
+            return None
+        try:
+            st = os.stat(self.local_db_path)
+            return f"{st.st_size}:{st.st_mtime_ns}"
+        except OSError:
+            return None
 
     def fetch_movies_metadata(self):
         if not os.path.exists(self.local_db_path):
