@@ -2680,7 +2680,7 @@ class MovieTracker {
     async loadRecommendations({ skipAutoRecalc = false } = {}) {
         this._recLoaded = false;
         this._recOffset = 0;
-        this._recCount = 40;
+        this._recCount = 0;
 
         try { localStorage.removeItem('for-you-pending'); } catch {}
 
@@ -2698,8 +2698,8 @@ class MovieTracker {
         let status = 'loading';
 
         try {
-            // 1. Zwykłe odpytanie Cloudflare Workera o gotowe dane w D1
-            const res = await fetch('/api/movies/recommendations?limit=40', {
+            // 1. Zwykłe odpytanie Cloudflare Workera o gotowe dane w D1 (bez limitu kart)
+            const res = await fetch('/api/movies/recommendations', {
                 headers: this.getAuthHeaders()
             });
 
@@ -2922,6 +2922,7 @@ class MovieTracker {
         const track = document.getElementById('for-you-track');
         const prev = document.getElementById('for-you-prev');
         const next = document.getElementById('for-you-next');
+        const countEl = document.getElementById('for-you-count');
         if (!track) return;
 
         this._lastRecMovies = movies || [];
@@ -2929,8 +2930,13 @@ class MovieTracker {
 
         track.classList.remove('is-loading');
         track.innerHTML = '';
+        track.scrollLeft = 0;
 
         if (status === 'empty' || !movies || movies.length === 0) {
+            if (countEl) {
+                countEl.textContent = '';
+                countEl.style.display = 'none';
+            }
             // Ukryj strzałki, gdy nie ma rekomendacji
             if (prev) prev.style.display = 'none';
             if (next) next.style.display = 'none';
@@ -2971,14 +2977,35 @@ class MovieTracker {
 
         this._recCount = movies.length;
 
-        // Renderowanie właściwych kart (bez zmian do poprzedniego kroku)
+        const isAdmin = Boolean(this.currentUser && this.currentUser.role === 'admin');
+        if (countEl) {
+            if (isAdmin && this._showRecModels) {
+                const countsByBadge = {};
+                movies.forEach((m) => {
+                    if (!m.recType) return;
+                    const badge = this.formatRecTypeBadge(m.recType);
+                    countsByBadge[badge] = (countsByBadge[badge] || 0) + 1;
+                });
+                const preferredOrder = ['CF', 'CB', 'LLM', 'HYBRID'];
+                const orderedBadges = [
+                    ...preferredOrder.filter((b) => countsByBadge[b]),
+                    ...Object.keys(countsByBadge).filter((b) => !preferredOrder.includes(b))
+                ];
+                const breakdown = orderedBadges.map((b) => `${b}: ${countsByBadge[b]}`).join(', ');
+                countEl.textContent = breakdown ? `${movies.length} (${breakdown})` : `${movies.length}`;
+            } else {
+                countEl.textContent = `${movies.length}`;
+            }
+            countEl.style.display = 'inline-block';
+        }
+
+        // Renderowanie właściwych kart
         movies.forEach((m, i) => {
             const card = document.createElement('div');
             card.className = 'for-you-card';
             card.dataset.movieId = m.id;
             const poster = this.getPosterUrl(m);
 
-            const isAdmin = this.currentUser && this.currentUser.role === 'admin';
             const cfLabel = (isAdmin && this._showRecModels && m.recType)
                 ? `<span class="for-you-card-cf">${this.escapeHtml(this.formatRecTypeBadge(m.recType))}</span>`
                 : '';
@@ -3031,6 +3058,10 @@ class MovieTracker {
 
         // Obliczamy dokładną szerokość przeskoku (szerokość karty + luka)
         const firstCard = track.querySelector('.for-you-card');
+        if (!firstCard) {
+            this._isScrolling = false;
+            return;
+        }
         const gap = parseFloat(getComputedStyle(track).gap || 12);
         const scrollAmount = firstCard.offsetWidth + gap;
 
@@ -3118,12 +3149,14 @@ class MovieTracker {
     bindArrowKeysForForYou() {
         document.addEventListener('keydown', (e) => {
             if (this.currentSection !== 'dashboard') return;
+            const tag = e.target?.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || e.target?.isContentEditable) return;
             if (e.key === 'ArrowLeft') {
                 e.preventDefault();
-                this._scrollForYouTo(Math.max(0, this._recOffset - 1));
+                this._scrollForYouTo(-1);
             } else if (e.key === 'ArrowRight') {
                 e.preventDefault();
-                this._scrollForYouTo(Math.min(Math.max(0, this._recCount - 1), this._recOffset + 1));
+                this._scrollForYouTo(1);
             }
         });
     }

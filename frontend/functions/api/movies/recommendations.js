@@ -36,13 +36,15 @@ export async function onRequest(context) {
     const userRow = await env.db.prepare('SELECT role FROM users WHERE id = ?').bind(userId).first();
     const isAdmin = userRow?.role === 'admin';
 
-    // Złączenie rekomendacji (CF + CB) z pełnymi danymi metadanymi filmu z tabeli movies.
-    // recommendation_type: 'collaborative_filtering' (CF) lub 'content_based' (CB).
+    // Złączenie rekomendacji (CF, CB, LLM, HYBRID) z pełnymi danymi metadanymi filmu z tabeli movies.
+    // recommendation_type: 'collaborative_filtering', 'content_based', 'llm_querec', 'hybrid_querec'.
     // predicted_rating: rekomendowana ocena (skala 1-5).
-    const limit = parseInt(url.searchParams.get('limit')) || 20;
-    const offset = parseInt(url.searchParams.get('offset')) || 0;
+    const rawLimit = url.searchParams.get('limit');
+    const parsedLimit = rawLimit !== null ? parseInt(rawLimit, 10) : null;
+    const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? parsedLimit : null;
+    const offset = Math.max(0, parseInt(url.searchParams.get('offset'), 10) || 0);
 
-const rows = await env.db.prepare(`
+    let sql = `
       SELECT
         r.user_id,
         r.movie_id,
@@ -68,8 +70,14 @@ const rows = await env.db.prepare(`
       JOIN movies m ON m.id = r.movie_id
       WHERE r.user_id = ?
       ORDER BY r.rank ASC, r.predicted_rating DESC
-      LIMIT ? OFFSET ?
-    `).bind(userId, limit + 1, offset).all();
+    `;
+    const bindings = [userId];
+    if (limit !== null) {
+      sql += '\n      LIMIT ? OFFSET ?';
+      bindings.push(limit + 1, offset);
+    }
+
+    const rows = await env.db.prepare(sql).bind(...bindings).all();
 
     // Przekształć w pełne obiekty filmów z typem rekomendacji
     const recommendations = rows.results.map(r => {
@@ -110,7 +118,7 @@ const rows = await env.db.prepare(`
       return item;
     });
 
-    const hasMore = recommendations.length > limit;
+    const hasMore = limit !== null && recommendations.length > limit;
     if (hasMore) recommendations.pop();
 
     const updatedAt = recommendations.reduce(
