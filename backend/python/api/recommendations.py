@@ -5,15 +5,19 @@ from surprise import Dataset, Reader
 from sklearn.metrics.pairwise import cosine_similarity
 
 from services.model_manager import RecommendationModelManager, tracker
+from services.llm_recommender import LLMVectorRecommender
 from database.db_manager import DatabaseManager
 
 router = APIRouter(prefix="/movies/user", tags=["Recommendations"])
 model_manager = RecommendationModelManager()
+llm_recommender = LLMVectorRecommender()
 db = DatabaseManager()
 
 API_KEY = os.getenv("MVT_API_KEY")
 REC_TYPE_CF = "collaborative_filtering"
 REC_TYPE_CB = "content_based"
+REC_TYPE_LLM = "llm_querec"
+REC_TYPE_HYBRID = "hybrid_querec"
 
 
 async def verify_api_key(header: str = Security(APIKeyHeader(name="X-API-Key", auto_error=False))):
@@ -29,11 +33,19 @@ async def verify_api_key(header: str = Security(APIKeyHeader(name="X-API-Key", a
 
 
 def _persist_recommendations(
-    user_id: int, recs: list, rec_type: str, key: str, label: str, force: bool, result: dict
+    user_id: int,
+    recs: list,
+    rec_type: str,
+    key: str,
+    label: str,
+    force: bool,
+    result: dict,
+    record_count: bool = True,
 ):
     """Zapisuje rekomendacje do D1, aktualizuje licznik i loguje wynik lub ostrzeżenie."""
     saved = db.save_cached_recommendations(user_id, recs, rec_type)
-    tracker.record_count(key, len(recs))
+    if record_count:
+        tracker.record_count(key, len(recs))
     result["data"] = recs
     if saved:
         prefix = "Wymuszono przeliczenie." if force else "Wygenerowano"
@@ -52,13 +64,16 @@ def _persist_recommendations(
         result["cache_warning"] = "Nie udało się zapisać rekomendacji do bazy D1."
 
 
-def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set[int], force: bool) -> dict:
+def _compute_cf_recommendations(
+    user_id: int, user_ratings, known_movie_ids: set[int], force: bool
+) -> tuple[dict, dict[int, float]]:
     """Oblicza lub pobiera z cache rekomendacje Collaborative Filtering w oparciu o globalną macierz ocen."""
     if not force:
         cf_cached = db.get_cached_recommendations(user_id, REC_TYPE_CF)
         if cf_cached:
             tracker.log("cf", "CF", f"Pobrano {len(cf_cached)} rekomendacji z pamięci podręcznej D1 dla user_id={user_id}.")
-            return {"source": "database_cache", "data": cf_cached}
+            cached_scores = {int(r["movie_id"]): float(r["rating"]) for r in cf_cached}
+            return {"source": "database_cache", "data": cf_cached}, cached_scores
 
     source = "forced-recalculation" if force else "computed"
     result = {"source": source, "data": []}
@@ -69,13 +84,13 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
             if force
             else "Brak ocen użytkownika do wyliczenia profilu (CF)."
         )
-        return result
+        return result, {}
 
     all_ratings = db.fetch_all_ratings()
     if all_ratings is None or all_ratings.empty:
         tracker.log("cf", "CF", f"Nie udało się pobrać globalnych ocen z bazy D1 dla user_id={user_id}.", level="error")
         result["message"] = "Nie udało się pobrać globalnych ocen z bazy D1 (CF)."
-        return result
+        return result, {}
 
     unique_users = all_ratings["user_id"].nunique()
     if unique_users < 2:
@@ -85,7 +100,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
             f"Za mało użytkowników z ocenami w bazie ({unique_users}) do wyliczenia globalnego modelu CF (wymaganych min. 2).",
         )
         result["message"] = "Za mało użytkowników z ocenami w bazie do wyliczenia modelu CF (wymaganych min. 2)."
-        return result
+        return result, {}
 
     target_user_id = int(user_id)
     if target_user_id not in set(int(u) for u in all_ratings["user_id"].unique()):
@@ -96,7 +111,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
             level="warning",
         )
         result["message"] = "Brak ocen użytkownika w globalnym zbiorze ocen (CF)."
-        return result
+        return result, {}
 
     # Predykcja wyłącznie dla filmów ocenionych przez innych użytkowników, których bieżący użytkownik nie zna.
     candidate_movie_ids = [
@@ -105,7 +120,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
     if not candidate_movie_ids:
         tracker.log("cf", "CF", f"Brak nowych filmów ocenionych przez innych użytkowników dla user_id={user_id}.")
         result["message"] = "Brak nowych filmów ocenionych przez innych użytkowników do polecenia (CF)."
-        return result
+        return result, {}
 
     data_signature = model_manager.compute_cf_signature(all_ratings)
     with model_manager._cf_lock:
@@ -122,7 +137,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
 
     if cf_model is None:
         result["message"] = "Brak modelu CF."
-        return result
+        return result, {}
 
     scored = []
     for m_id in candidate_movie_ids:
@@ -133,6 +148,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
 
     # Sortowanie przed zaokrągleniem zapewnia deterministyczne i dokładne rozstrzyganie remisów.
     scored.sort(key=lambda item: (-item[0], item[1]))
+    cf_all_scores = {m_id: est for est, m_id in scored}
     top_cf = [
         {
             "movie_id": m_id,
@@ -145,7 +161,7 @@ def _compute_cf_recommendations(user_id: int, user_ratings, known_movie_ids: set
     if top_cf:
         _persist_recommendations(user_id, top_cf, REC_TYPE_CF, "cf", "CF", force, result)
 
-    return result
+    return result, cf_all_scores
 
 
 def _compute_cb_recommendations(
@@ -229,9 +245,113 @@ def _compute_cb_recommendations(
     return result
 
 
+def _compute_llm_and_hybrid_recommendations(
+    user_id: int,
+    user_ratings,
+    watched_details: list[dict],
+    onboarding_movie_ids: set[int],
+    known_movie_ids: set[int],
+    cf_scores: dict[int, float],
+    force: bool,
+) -> tuple[dict, dict]:
+    """Oblicza lub pobiera z cache rekomendacje LLM (llm_querec) oraz fuzję CF + LLM (hybrid_querec)."""
+    llm_cached = None if force else db.get_cached_recommendations(user_id, REC_TYPE_LLM)
+    hybrid_cached = None if force else db.get_cached_recommendations(user_id, REC_TYPE_HYBRID)
+
+    if llm_cached and hybrid_cached:
+        tracker.log("llm", "LLM", f"Pobrano {len(llm_cached)} rekomendacji LLM i {len(hybrid_cached)} Hybrid z D1 dla user_id={user_id}.")
+        return (
+            {"source": "database_cache", "data": llm_cached},
+            {"source": "database_cache", "data": hybrid_cached},
+        )
+
+    source = "forced-recalculation" if force else "computed"
+    llm_result = {"source": "database_cache", "data": llm_cached} if llm_cached else {"source": source, "data": []}
+    hybrid_result = {"source": "database_cache", "data": hybrid_cached} if hybrid_cached else {"source": source, "data": []}
+
+    if llm_recommender.embeddings is None:
+        llm_recommender.load_index()
+    if llm_recommender.embeddings is None:
+        msg = "Brak lokalnego indeksu wektorowego filmów."
+        tracker.log("llm", "LLM", f"{msg} (user_id={user_id})", level="warning")
+        if not llm_cached:
+            llm_result["message"] = msg
+        if not hybrid_cached:
+            hybrid_result["message"] = msg
+        return llm_result, hybrid_result
+
+    profile_movie_ids: list[int] = []
+    if user_ratings is not None and not user_ratings.empty:
+        profile_movie_ids.extend(int(m) for m in user_ratings["movie_id"].tolist())
+    profile_movie_ids.extend(int(w["movie_id"]) for w in (watched_details or [])[:10])
+    profile_movie_ids.extend(int(m) for m in onboarding_movie_ids)
+    movies_by_id = db.fetch_movies_by_ids(profile_movie_ids)
+
+    tracker.start("llm", "LLM", f"Generowanie rekomendacji LLM i Hybrid (user_id={user_id})")
+    try:
+        queries, query_source = llm_recommender.generate_user_queries(
+            user_ratings, watched_details, onboarding_movie_ids, movies_by_id, user_id=user_id
+        )
+        tracker.log("llm", "LLM", f"Zapytania ({query_source}): {queries} | user_id={user_id}")
+
+        query_vecs = llm_recommender.embed_queries(queries)
+        llm_candidates = llm_recommender.search_by_query_vectors(
+            query_vecs, exclude_ids=known_movie_ids, top_k=100
+        )
+        llm_scores_map = {m_id: score for score, m_id in llm_candidates}
+
+        if not llm_cached:
+            if llm_candidates:
+                top_llm_raw = llm_candidates[:10]
+                max_score = max(0.0, top_llm_raw[0][0]) or 1.0
+                llm_recs = [
+                    {
+                        "movie_id": m_id,
+                        "rating": round(3.5 + (max(0.0, score) / max_score) * 1.5, 2),
+                        "confidence_interval": [0.0, 0.0],
+                    }
+                    for score, m_id in top_llm_raw
+                ]
+                _persist_recommendations(user_id, llm_recs, REC_TYPE_LLM, "llm", "LLM", force, llm_result)
+            else:
+                llm_result["message"] = "Brak pasujących filmów w indeksie wektorowym."
+        else:
+            tracker.record_count("llm", len(llm_cached))
+
+        if not hybrid_cached:
+            hybrid_recs = llm_recommender.fuse_cf_and_llm(
+                cf_scores, llm_scores_map, query_vecs, top_k=10
+            )
+            if hybrid_recs:
+                _persist_recommendations(
+                    user_id,
+                    hybrid_recs,
+                    REC_TYPE_HYBRID,
+                    "llm",
+                    "HYBRID",
+                    force,
+                    hybrid_result,
+                    record_count=False,
+                )
+            else:
+                hybrid_result["message"] = "Brak kandydatów do fuzji CF + LLM."
+
+        tracker.finish("llm", "LLM", ok=True, message=f"LLM + Hybrid gotowe (user_id={user_id})")
+    except Exception as e:
+        tracker.log("llm", "LLM", f"Błąd LLM/Hybrid: {e} | user_id={user_id}", level="error")
+        tracker.finish("llm", "LLM", ok=False, message=f"Błąd LLM/Hybrid (user_id={user_id})")
+        if not llm_cached:
+            llm_result["message"] = f"Błąd silnika LLM: {e}"
+        if not hybrid_cached:
+            hybrid_result["message"] = f"Błąd modelu hybrydowego: {e}"
+
+    return llm_result, hybrid_result
+
+
 def compute_recommendations(user_id: int, force: bool = False) -> dict:
     user_ratings = db.fetch_user_ratings(user_id)
-    watched_movie_ids = set(db.fetch_watched_movies(user_id))
+    watched_details = db.fetch_watched_detailed(user_id)
+    watched_movie_ids = {int(w["movie_id"]) for w in watched_details}
     onboarding_movie_ids = set(db.fetch_onboarding_movies(user_id))
 
     if (user_ratings is None or user_ratings.empty) and not onboarding_movie_ids:
@@ -243,19 +363,25 @@ def compute_recommendations(user_id: int, force: bool = False) -> dict:
         rated_movie_ids = set()
 
     # Zbiór wszystkich filmów, których nie chcemy już polecać
-    known_movie_ids = rated_movie_ids.union(
-        int(m) for m in watched_movie_ids
-    ).union(
+    known_movie_ids = rated_movie_ids.union(watched_movie_ids).union(
         int(m) for m in onboarding_movie_ids
+    )
+
+    cf_result, cf_scores = _compute_cf_recommendations(user_id, user_ratings, known_movie_ids, force)
+    cb_result = _compute_cb_recommendations(
+        user_id, user_ratings, onboarding_movie_ids, known_movie_ids, force
+    )
+    llm_result, hybrid_result = _compute_llm_and_hybrid_recommendations(
+        user_id, user_ratings, watched_details, onboarding_movie_ids, known_movie_ids, cf_scores, force
     )
 
     return {
         "status": "success",
         "user_id": user_id,
-        "collaborative": _compute_cf_recommendations(user_id, user_ratings, known_movie_ids, force),
-        "content_based": _compute_cb_recommendations(
-            user_id, user_ratings, onboarding_movie_ids, known_movie_ids, force
-        ),
+        "collaborative": cf_result,
+        "content_based": cb_result,
+        "llm_querec": llm_result,
+        "hybrid_querec": hybrid_result,
     }
 
 

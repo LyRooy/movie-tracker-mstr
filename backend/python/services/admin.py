@@ -5,17 +5,20 @@ from services.model_manager import tracker
 router = APIRouter(prefix="/admin", tags=["Admin Panel"])
 
 
+MODEL_KEYS = ("cf", "cb", "llm")
+
+
 @router.get("/status")
 async def status():
     models = {}
-    for key in ("cf", "cb"):
+    for key in MODEL_KEYS:
         models[key] = tracker.snapshot(key)
     return models
 
 
 @router.get("/model/{model}")
 async def model(model: str):
-    if model not in ("cf", "cb"):
+    if model not in MODEL_KEYS:
         raise HTTPException(status_code=400, detail=f"Nieznany model: {model}")
     return tracker.snapshot(model)
 
@@ -23,13 +26,13 @@ async def model(model: str):
 @router.websocket("/ws")
 async def admin_ws(websocket: WebSocket):
     await websocket.accept()
-    sent_events = {"cf": 0, "cb": 0}
-    sent_logs = {"cf": 0, "cb": 0}
+    sent_events = {key: 0 for key in MODEL_KEYS}
+    sent_logs = {key: 0 for key in MODEL_KEYS}
     try:
         print(f"[admin_ws] Połączono. Rozpoczęto streamowanie dla {len(tracker.models)} modeli.")
         while True:
             try:
-                for model_key in ("cf", "cb"):
+                for model_key in MODEL_KEYS:
                     snap = tracker.snapshot(model_key)
                     new_events = snap["events"][sent_events[model_key]:]
                     # Liczba zapisanych rekomendacji (z /admin/status) dołączana do

@@ -2638,7 +2638,7 @@ class MovieTracker {
     async loadRecommendations({ skipAutoRecalc = false } = {}) {
         this._recLoaded = false;
         this._recOffset = 0;
-        this._recCount = 20;
+        this._recCount = 40;
 
         try { localStorage.removeItem('for-you-pending'); } catch {}
 
@@ -2657,7 +2657,7 @@ class MovieTracker {
 
         try {
             // 1. Zwykłe odpytanie Cloudflare Workera o gotowe dane w D1
-            const res = await fetch('/api/movies/recommendations?limit=20', {
+            const res = await fetch('/api/movies/recommendations?limit=40', {
                 headers: this.getAuthHeaders()
             });
 

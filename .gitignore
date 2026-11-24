@@ -45,3 +45,7 @@ Thumbs.db
 backend/python/models/*.pkl
 backend/python/models/*.pkl.tmp
 backend/python/models/*.joblib
+backend/python/models/*.npy
+backend/python/models/*.npz
+backend/python/models/embeddings_meta.json
+backend/python/models/*.tmp

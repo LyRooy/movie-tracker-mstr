@@ -28,7 +28,7 @@ var (
 	// === Stan live postępu modeli (przekazywany z Pythona) ===
 	// mu chroni dane przed równoczesnym dostępem z wielu połączeń WebSocket
 	stateMu sync.RWMutex
-	// models: klucz "cf"/"cb" -> aktualny stan (status, events, logs)
+	// models: klucz "cf"/"cb"/"llm" -> aktualny stan (status, events, logs)
 	models map[string]ModelState
 )
 
@@ -38,8 +38,9 @@ var (
 func initProgressState(baseURL string) {
 	if models == nil {
 		models = map[string]ModelState{
-			"cf": {Status: "not_started", Events: []ModelStatus{}, Logs: []ModelStatus{}},
-			"cb": {Status: "not_started", Events: []ModelStatus{}, Logs: []ModelStatus{}},
+			"cf":  {Status: "not_started", Events: []ModelStatus{}, Logs: []ModelStatus{}},
+			"cb":  {Status: "not_started", Events: []ModelStatus{}, Logs: []ModelStatus{}},
+			"llm": {Status: "not_started", Events: []ModelStatus{}, Logs: []ModelStatus{}},
 		}
 	}
 }
@@ -161,15 +162,16 @@ func fetchPythonProgress(baseURL string) (map[string]ModelState, bool) {
 	}
 
 	var status struct {
-		CF ModelState `json:"cf"`
-		CB ModelState `json:"cb"`
+		CF  ModelState `json:"cf"`
+		CB  ModelState `json:"cb"`
+		LLM ModelState `json:"llm"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&status); err != nil {
 		log.Printf("Nie udalo sie zdeserialize statusu Pythona: %v", err)
 		return nil, false
 	}
 
-	out := make(map[string]ModelState, 2)
+	out := make(map[string]ModelState, 3)
 	// ModelState zawiera slice, więc nie mozna go porownać z wartoscia domyslna (!=).
 	// Zamiast tego sprawdzamy, czy model ma jakies dane.
 	if modelHasData(status.CF) {
@@ -177,6 +179,9 @@ func fetchPythonProgress(baseURL string) (map[string]ModelState, bool) {
 	}
 	if modelHasData(status.CB) {
 		out["cb"] = status.CB
+	}
+	if modelHasData(status.LLM) {
+		out["llm"] = status.LLM
 	}
 	return out, true
 }

@@ -11,11 +11,12 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 class ProgressTracker:
     def __init__(self):
         self._lock = threading.Lock()
-        # klucze: "cf" / "cb" — inicjalizowane od razu, żeby /admin/ws nie
+        # klucze: "cf" / "cb" / "llm" — inicjalizowane od razu, żeby /admin/ws nie
         # rzucał KeyError zanim jakikolwiek model zacznie sie budować.
         self.models = {
             "cf": {"status": "not_started", "events": [], "logs": [], "count": None},
             "cb": {"status": "not_started", "events": [], "logs": [], "count": None},
+            "llm": {"status": "not_started", "events": [], "logs": [], "count": None},
         }
 
     def record_count(self, key, count):

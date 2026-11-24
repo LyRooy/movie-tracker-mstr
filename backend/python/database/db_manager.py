@@ -110,11 +110,16 @@ class DatabaseManager:
         return None
 
     def fetch_user_ratings(self, user_id: int):
-        sql_query = "SELECT rating, movie_id FROM reviews WHERE user_id = ? ORDER BY created_at DESC"
+        sql_query = (
+            "SELECT rating, movie_id, IFNULL(content, '') AS content, created_at "
+            "FROM reviews "
+            "WHERE user_id = ? "
+            "ORDER BY COALESCE(updated_at, created_at) DESC, id DESC"
+        )
         res_json = self._execute_d1(sql_query, params=[user_id], debug_label="FETCH")
         if res_json is not None:
             rows = self._extract_rows(res_json)
-            return pd.DataFrame(rows, columns=["rating", "movie_id"])
+            return pd.DataFrame(rows, columns=["rating", "movie_id", "content", "created_at"])
         return None
 
     def fetch_all_ratings(self, batch_size: int = 10000):
@@ -164,6 +169,26 @@ class DatabaseManager:
         if res_json is not None:
             rows = self._extract_rows(res_json)
             return [r["movie_id"] for r in rows] if rows else []
+        return []
+
+    def fetch_watched_detailed(self, user_id: int) -> list[dict]:
+        """Pobiera historię obejrzeń użytkownika z datą i statusem."""
+        sql_query = (
+            "SELECT movie_id, IFNULL(status, 'watched') AS status, watched_date "
+            "FROM watched WHERE user_id = ? ORDER BY watched_date DESC, id DESC"
+        )
+        res_json = self._execute_d1(sql_query, params=[user_id])
+        if res_json is not None:
+            rows = self._extract_rows(res_json)
+            return [
+                {
+                    "movie_id": int(r["movie_id"]),
+                    "status": r.get("status") or "watched",
+                    "watched_date": r.get("watched_date"),
+                }
+                for r in rows
+                if r.get("movie_id") is not None
+            ]
         return []
 
     def fetch_onboarding_movies(self, user_id: int):
@@ -237,6 +262,45 @@ class DatabaseManager:
             return f"{st.st_size}:{st.st_mtime_ns}"
         except OSError:
             return None
+
+    def fetch_movies_by_ids(self, movie_ids: list[int]) -> dict[int, dict]:
+        """Pobiera metadane wybranych filmów/seriali z lokalnej bazy movies.db."""
+        unique_ids = list({int(m) for m in movie_ids if m is not None})
+        if not unique_ids or not os.path.exists(self.local_db_path):
+            return {}
+
+        result: dict[int, dict] = {}
+        try:
+            conn = sqlite3.connect(self.local_db_path)
+            conn.row_factory = sqlite3.Row
+            try:
+                for start in range(0, len(unique_ids), 500):
+                    chunk = unique_ids[start:start + 500]
+                    placeholders = ",".join("?" for _ in chunk)
+                    rows = conn.execute(
+                        f"""
+                        SELECT
+                            id,
+                            title,
+                            release_date,
+                            media_type,
+                            COALESCE(NULLIF(genres, ''), genre, '') AS genres,
+                            IFNULL(director, '') AS director,
+                            IFNULL("cast", '') AS cast_members,
+                            IFNULL(tagline, '') AS tagline,
+                            COALESCE(NULLIF(overview, ''), description, '') AS overview
+                        FROM movies
+                        WHERE id IN ({placeholders})
+                        """,
+                        chunk,
+                    ).fetchall()
+                    for row in rows:
+                        result[int(row["id"])] = dict(row)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"Błąd odczytu metadanych filmów po ID: {e}")
+        return result
 
     def fetch_movies_metadata(self):
         if not os.path.exists(self.local_db_path):
