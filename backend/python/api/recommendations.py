@@ -173,7 +173,12 @@ def _compute_cf_recommendations(
 
 
 def _compute_cb_recommendations(
-    user_id: int, user_ratings, onboarding_movie_ids: set[int], known_movie_ids: set[int], force: bool
+    user_id: int,
+    user_ratings,
+    onboarding_movie_ids: set[int],
+    known_movie_ids: set[int],
+    force: bool,
+    watched_fallback_ids: list[int] | None = None,
 ) -> dict:
     """Oblicza lub pobiera z cache rekomendacje Content-Based (TF-IDF + cosine similarity)."""
     if not force:
@@ -190,14 +195,16 @@ def _compute_cb_recommendations(
     if user_ratings is not None and not user_ratings.empty:
         good_movies = user_ratings[user_ratings["rating"] >= 4]["movie_id"].tolist()
 
-    # FALLBACK ONBOARDINGU (COLD START)
+    # FALLBACK ONBOARDINGU I OBEJRZANYCH FILMOW (COLD START)
     if not good_movies and onboarding_movie_ids:
         good_movies = list(onboarding_movie_ids)
-        if not force:
-            tracker.log("cb", "CB", f"Cold start: Użyto {len(good_movies)} filmów z onboardingu dla user_id={user_id}.")
+        tracker.log("cb", "CB", f"Cold start: Użyto {len(good_movies)} filmów z onboardingu dla user_id={user_id}.")
+    elif not good_movies and watched_fallback_ids:
+        good_movies = list(dict.fromkeys(int(m) for m in watched_fallback_ids))
+        tracker.log("cb", "CB", f"Cold start: Użyto {len(good_movies)} obejrzanych filmów dla user_id={user_id}.")
 
     if not good_movies:
-        result["message"] = "Brak pozytywnych ocen lub filmów startowych do profilowania CB"
+        result["message"] = "Brak pozytywnych ocen, filmów startowych ani obejrzanych do profilowania CB"
         return result
 
     cb_signature = db.get_local_movies_db_signature()
@@ -375,10 +382,11 @@ def compute_recommendations(user_id: int, force: bool = False) -> dict:
     user_ratings = db.fetch_user_ratings(user_id)
     watched_details = db.fetch_watched_detailed(user_id)
     watched_movie_ids = {int(w["movie_id"]) for w in watched_details}
+    active_watched_ids = [int(w["movie_id"]) for w in watched_details if w.get("status") != "dropped"]
     onboarding_movie_ids = set(db.fetch_onboarding_movies(user_id))
 
-    if (user_ratings is None or user_ratings.empty) and not onboarding_movie_ids:
-        return {"status": "error", "message": "Brak ocen i filmów startowych użytkownika"}
+    if (user_ratings is None or user_ratings.empty) and not onboarding_movie_ids and not active_watched_ids:
+        return {"status": "error", "message": "Brak ocen, filmów startowych ani obejrzanych użytkownika"}
 
     if user_ratings is not None and not user_ratings.empty:
         rated_movie_ids = set(int(m) for m in user_ratings["movie_id"].tolist())
@@ -392,7 +400,12 @@ def compute_recommendations(user_id: int, force: bool = False) -> dict:
 
     cf_result, cf_scores = _compute_cf_recommendations(user_id, user_ratings, known_movie_ids, force)
     cb_result = _compute_cb_recommendations(
-        user_id, user_ratings, onboarding_movie_ids, known_movie_ids, force
+        user_id,
+        user_ratings,
+        onboarding_movie_ids,
+        known_movie_ids,
+        force,
+        watched_fallback_ids=active_watched_ids,
     )
     llm_result, hybrid_result = _compute_llm_and_hybrid_recommendations(
         user_id, user_ratings, watched_details, onboarding_movie_ids, known_movie_ids, cf_scores, force

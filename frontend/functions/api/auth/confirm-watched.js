@@ -18,7 +18,7 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-// POST - Przenosi filmy z onboardingu do obejrzanych
+// POST - Przenosi wybrane filmy z onboardingu do obejrzanych oraz opcjonalnie zapisuje ich oceny i recenzje
 export async function onRequestPost(context) {
   const { request, env } = context;
 
@@ -32,38 +32,69 @@ export async function onRequestPost(context) {
 
   try {
     const body = await request.json();
-    const movieIds = Array.isArray(body.movieIds) ? body.movieIds : [];
+    let normalizedItems = [];
 
-    if (movieIds.length === 0) {
-      return new Response(JSON.stringify({ success: true, message: 'Brak filmów' }), {
+    if (Array.isArray(body.items)) {
+      normalizedItems = body.items
+        .map((it) => {
+          const movieId = parseInt(it?.movieId, 10);
+          if (!Number.isInteger(movieId) || movieId <= 0) return null;
+          const rawRating = it?.rating != null ? parseInt(it.rating, 10) : null;
+          const rating = Number.isInteger(rawRating) && rawRating >= 1 && rawRating <= 5 ? rawRating : null;
+          const review = typeof it?.review === 'string' ? it.review.trim().slice(0, 2000) : '';
+          return { movieId, rating, review };
+        })
+        .filter(Boolean);
+    } else if (Array.isArray(body.movieIds)) {
+      normalizedItems = body.movieIds
+        .map((id) => parseInt(id, 10))
+        .filter((id) => Number.isInteger(id) && id > 0)
+        .map((movieId) => ({ movieId, rating: null, review: '' }));
+    }
+
+    if (normalizedItems.length === 0) {
+      return new Response(JSON.stringify({ success: true, watchedCount: 0, ratedCount: 0, message: 'Brak filmów' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
     const statements = [];
-    
-    // 1. Dodajemy do tabeli watched (dzisiejsza data, status watched)
+
+    // Dodajemy filmy z onboardingu do tabeli watched (bez usuwania ich z user_onboarding_movies,
+    // aby silnik rekomendacji zachowal sygnal cold-start przed pierwsza ocena)
     const insertWatchedStmt = env.db.prepare(
       `INSERT OR IGNORE INTO watched (user_id, movie_id, watched_date, status) 
        VALUES (?, ?, date('now'), 'watched')`
     );
-    
-    // 2. Usuwamy z tabeli user_onboarding_movies
-    const deleteOnboardingStmt = env.db.prepare(
-      `DELETE FROM user_onboarding_movies WHERE user_id = ? AND movie_id = ?`
+    const deleteReviewStmt = env.db.prepare(
+      `DELETE FROM reviews WHERE user_id = ? AND movie_id = ?`
+    );
+    const insertReviewStmt = env.db.prepare(
+      `INSERT INTO reviews (user_id, movie_id, content, rating) VALUES (?, ?, ?, ?)`
     );
 
-    // Pakujemy to w jedną transakcję batch() dla każdego ID
-    for (const movieId of movieIds) {
-      statements.push(insertWatchedStmt.bind(userId, movieId));
-      statements.push(deleteOnboardingStmt.bind(userId, movieId));
+    let ratedCount = 0;
+    for (const item of normalizedItems) {
+      statements.push(insertWatchedStmt.bind(userId, item.movieId));
+      if (item.rating !== null) {
+        ratedCount++;
+        statements.push(deleteReviewStmt.bind(userId, item.movieId));
+        statements.push(insertReviewStmt.bind(userId, item.movieId, item.review || '', item.rating));
+      }
     }
 
     await env.db.batch(statements);
 
-    return new Response(JSON.stringify({ success: true }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    return new Response(
+      JSON.stringify({
+        success: true,
+        watchedCount: normalizedItems.length,
+        ratedCount,
+      }),
+      {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      }
+    );
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
       status: 500,

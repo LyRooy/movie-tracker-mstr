@@ -33,7 +33,19 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'Content-Type, Authorization',
 };
 
-// GET - zwróć listę filmów do wyboru (z datasetu Kaggle)
+function resolvePoster(row) {
+  let poster = row?.poster_path || row?.poster_url || '';
+  if (!poster) return null;
+  if (poster.startsWith('http://')) {
+    return poster.replace('http://', 'https://');
+  }
+  if (!poster.startsWith('http')) {
+    return `https://image.tmdb.org/t/p/w200${poster}`;
+  }
+  return poster;
+}
+
+// GET - zwróć losową listę filmów lub wyniki wyszukiwania po tytule (?q=...)
 export async function onRequestGet(context) {
   const { request, env } = context;
 
@@ -45,23 +57,45 @@ export async function onRequestGet(context) {
     });
   }
 
-  // Pobierz 30 zróżnicowanych filmów: pula 300 najpopularniejszych, max 3 z każdego gatunku
-  // Gwarantuje 30 wyników nawet przy małej liczbie gatunków
-  const movies = await env.db.prepare(`
-    WITH pool AS (
-      SELECT id, title, poster_url, media_type
+  const url = new URL(request.url);
+  const query = (url.searchParams.get('q') || '').trim();
+
+  let rowsResult;
+  if (query.length >= 2) {
+    const pattern = `%${query.toLowerCase()}%`;
+    rowsResult = await env.db.prepare(`
+      SELECT id, title, poster_path, poster_url, media_type, release_date
       FROM movies
-      WHERE media_type = 'movie'
-        AND poster_url IS NOT NULL AND poster_url != ''
+      WHERE LOWER(title) LIKE ? OR LOWER(IFNULL(original_title, '')) LIKE ?
       ORDER BY popularity DESC
-      LIMIT 150
-    )
-    SELECT id, title, poster_url, media_type
-    FROM pool
-    ORDER BY RANDOM()
-    LIMIT 30
-  `).all();
-  return new Response(JSON.stringify(movies.results || []), {
+      LIMIT 30
+    `).bind(pattern, pattern).all();
+  } else {
+    rowsResult = await env.db.prepare(`
+      WITH pool AS (
+        SELECT id, title, poster_path, poster_url, media_type, release_date
+        FROM movies
+        WHERE media_type = 'movie'
+          AND ((poster_url IS NOT NULL AND poster_url != '') OR (poster_path IS NOT NULL AND poster_path != ''))
+        ORDER BY popularity DESC
+        LIMIT 150
+      )
+      SELECT id, title, poster_path, poster_url, media_type, release_date
+      FROM pool
+      ORDER BY RANDOM()
+      LIMIT 30
+    `).all();
+  }
+
+  const movies = (rowsResult.results || []).map((row) => ({
+    id: row.id,
+    title: row.title,
+    poster_url: resolvePoster(row),
+    media_type: row.media_type,
+    release_date: row.release_date || null,
+  }));
+
+  return new Response(JSON.stringify(movies), {
     headers: { ...corsHeaders, 'Content-Type': 'application/json' },
   });
 }

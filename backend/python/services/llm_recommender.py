@@ -323,15 +323,22 @@ class LLMVectorRecommender:
         user_ratings,
         onboarding_ids: set[int],
         movies_by_id: dict[int, dict],
+        watched_details: list[dict] | None = None,
     ) -> list[str]:
-        """Tworzy zapytania zastępcze z metadanych polubionych filmów, gdy chat LLM jest niedostępny."""
+        """Tworzy zapytania zastępcze z metadanych polubionych/obejrzanych filmów, gdy chat LLM jest niedostępny."""
         seed_ids: list[int] = []
         if user_ratings is not None and not user_ratings.empty:
             for r, m in zip(user_ratings["rating"].tolist(), user_ratings["movie_id"].tolist()):
                 if float(r) >= 4.0:
                     seed_ids.append(int(m))
-        if not seed_ids:
+        if not seed_ids and onboarding_ids:
             seed_ids = [int(m) for m in onboarding_ids]
+        if not seed_ids and watched_details:
+            seed_ids = [
+                int(w["movie_id"])
+                for w in watched_details
+                if w.get("movie_id") is not None and w.get("status") != "dropped"
+            ]
 
         queries = []
         for m_id in seed_ids[:4]:
@@ -360,7 +367,9 @@ class LLMVectorRecommender:
             user_ratings, watched_details, onboarding_ids, movies_by_id
         )
         if not profile_text:
-            return self._build_fallback_queries(user_ratings, onboarding_ids, movies_by_id), "fallback"
+            return self._build_fallback_queries(
+                user_ratings, onboarding_ids, movies_by_id, watched_details=watched_details
+            ), "fallback"
 
         system_prompt = (
             "You are a movie recommendation query generator (QueRec). "
@@ -382,7 +391,9 @@ class LLMVectorRecommender:
                 if queries:
                     return queries[:5], self.chat_model
 
-        return self._build_fallback_queries(user_ratings, onboarding_ids, movies_by_id), "fallback"
+        return self._build_fallback_queries(
+            user_ratings, onboarding_ids, movies_by_id, watched_details=watched_details
+        ), "fallback"
 
     @staticmethod
     def _sanitize_ask_ai_filters(raw_filters) -> dict:

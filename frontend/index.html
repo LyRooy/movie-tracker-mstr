@@ -49,7 +49,7 @@
             </ul>
             <div class="nav-user-actions">
                 <a href="#profile" class="nav-link nav-profile-link" title="Profil">
-                    <img id="nav-avatar" src="https://placehold.co/32x32/cccccc/666666/png?text=U" alt="Avatar" class="nav-avatar-img">
+                    <img id="nav-avatar" src="images/default-avatar.png" alt="Avatar" class="nav-avatar-img">
                     <span id="nav-username" class="nav-username-text"></span>
                 </a>
                 <button id="theme-toggle" class="theme-toggle" title="Przełącz motyw">
@@ -815,27 +815,56 @@
         <div class="modal-content favorites-modal-content">
             <div class="favorites-modal-header">
                 <div>
-                    <h2>Witaj w MovieTracker!</h2>
-                    <p class="favorites-modal-subtitle">Zaznacz filmy, które już widziałeś — im więcej wybierzesz, tym trafniejsze będą Twoje rekomendacje. Wybierz co najmniej 3, żeby uruchomić silnik rekomendacji.</p>
+                    <h2 id="favorites-modal-title">Witaj w MovieTracker!</h2>
+                    <p id="favorites-modal-subtitle" class="favorites-modal-subtitle">Zaznacz filmy, które lubisz lub już widziałeś - im więcej wybierzesz, tym trafniejsze będą Twoje rekomendacje. Możesz też wyszukać własne tytuły.</p>
                 </div>
                 <button class="favorites-skip-btn" id="favorites-skip-btn" title="Zamknij">
                     &times;
                 </button>
             </div>
             <div class="favorites-modal-body">
-                <div id="favorites-movies-grid" class="favorites-movies-grid">
-                    <div class="favorites-loading">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        <span>Ładowanie filmów...</span>
+                <!-- KROK 1: Wybór filmów (losowanie + wyszukiwarka) -->
+                <div id="favorites-step-1">
+                    <div class="favorites-search-bar">
+                        <div class="favorites-search-input-wrap">
+                            <i class="fas fa-search"></i>
+                            <input type="text" id="favorites-search-input" placeholder="Wyszukaj inny film lub serial po tytule..." autocomplete="off">
+                            <button type="button" id="favorites-search-clear-btn" class="favorites-search-clear-btn" title="Wyczyść wyszukiwanie" style="display: none;">&times;</button>
+                        </div>
+                        <button type="button" id="favorites-reroll-btn" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-dice"></i> Wylosuj inne
+                        </button>
                     </div>
+                    <div id="favorites-selected-strip" class="favorites-selected-strip" style="display: none;"></div>
+                    <div id="favorites-movies-grid" class="favorites-movies-grid">
+                        <div class="favorites-loading">
+                            <i class="fas fa-spinner fa-spin"></i>
+                            <span>Ładowanie filmów...</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- KROK 2: Dodanie do obejrzanych, ocena i opcjonalna recenzja -->
+                <div id="favorites-step-2" style="display: none;">
+                    <p class="onboarding-rate-intro">
+                        Wybrane tytuły możesz od razu dodać do listy <strong>Obejrzane</strong> wraz z oceną w gwiazdkach (1-5) i krótką recenzją. Wystawienie ocen pozwala od razu wygenerować trafniejsze rekomendacje!
+                    </p>
+                    <div id="onboarding-rate-list" class="onboarding-rate-list"></div>
                 </div>
             </div>
             <div class="favorites-modal-footer">
                 <span id="favorites-selected-count" class="favorites-count-label">Zaznaczono: 0</span>
-                <div class="favorites-footer-actions">
-                    <button class="btn btn-secondary" id="favorites-skip-btn2">Pomiń</button>
-                    <button class="btn btn-primary" id="favorites-save-btn">
-                        <i class="fas fa-check"></i> Zapisz wybór
+                <div id="favorites-footer-step-1" class="favorites-footer-actions">
+                    <button type="button" class="btn btn-secondary" id="favorites-skip-btn2">Pomiń</button>
+                    <button type="button" class="btn btn-primary" id="favorites-save-btn">
+                        <i class="fas fa-arrow-right"></i> Dalej
+                    </button>
+                </div>
+                <div id="favorites-footer-step-2" class="favorites-footer-actions" style="display: none;">
+                    <button type="button" class="btn btn-secondary" id="onboarding-back-btn">Wróć</button>
+                    <button type="button" class="btn btn-secondary" id="onboarding-skip-watched-btn">Pomiń dodawanie</button>
+                    <button type="button" class="btn btn-primary" id="onboarding-confirm-watched-btn">
+                        <i class="fas fa-check"></i> Dodaj do obejrzanych i zapisz
                     </button>
                 </div>
             </div>
