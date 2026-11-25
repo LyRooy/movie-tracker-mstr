@@ -29,7 +29,22 @@ export async function onRequest(context) {
       return jsonResponse({ error: 'Wymagane logowanie.' }, 401, corsHeaders);
     }
 
+    const surveyEnabled = await isSurveyEnabled(env.db);
+
     if (method === 'GET') {
+      if (!surveyEnabled) {
+        return jsonResponse(
+          {
+            surveyEnabled: false,
+            submitted: false,
+            ready: false,
+            sets: [],
+          },
+          200,
+          corsHeaders
+        );
+      }
+
       const existing = await env.db
         .prepare(
           'SELECT id, winner_label, ask_ai_used, ask_ai_rating, created_at FROM survey_submissions WHERE user_id = ?'
@@ -40,6 +55,7 @@ export async function onRequest(context) {
       if (existing) {
         return jsonResponse(
           {
+            surveyEnabled: true,
             submitted: true,
             submission: {
               winnerLabel: existing.winner_label,
@@ -56,6 +72,7 @@ export async function onRequest(context) {
       const { sets } = await buildBlindSetsForUser(env.db, userId, env.SURVEY_SALT);
       return jsonResponse(
         {
+          surveyEnabled: true,
           submitted: false,
           ready: sets.length > 0,
           setsCount: sets.length,
@@ -68,6 +85,17 @@ export async function onRequest(context) {
     }
 
     if (method === 'POST') {
+      if (!surveyEnabled) {
+        return jsonResponse(
+          {
+            error: 'Sesja ankiet jeszcze nie została rozpoczęta przez administratora.',
+            surveyLocked: true,
+          },
+          403,
+          corsHeaders
+        );
+      }
+
       const existing = await env.db
         .prepare('SELECT id FROM survey_submissions WHERE user_id = ?')
         .bind(userId)
@@ -508,6 +536,11 @@ async function buildBlindSetsForUser(db, userId, salt) {
   }
 
   return { sets, blindMapping, validMovieMap };
+}
+
+async function isSurveyEnabled(db) {
+  const row = await db.prepare("SELECT value FROM app_settings WHERE key = 'survey_enabled'").first();
+  return row?.value === '1';
 }
 
 async function getUserIdFromRequest(request) {

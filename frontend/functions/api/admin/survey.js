@@ -21,7 +21,7 @@ export async function onRequest(context) {
 
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
+    'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   };
 
@@ -157,6 +157,31 @@ export async function onRequest(context) {
       );
     }
 
+    if (method === 'PATCH') {
+      let body;
+      try {
+        body = await request.json();
+      } catch {
+        return jsonResponse({ error: 'Nieprawidłowy format JSON.' }, 400, corsHeaders);
+      }
+
+      const surveyEnabled = Boolean(body?.surveyEnabled);
+      const val = surveyEnabled ? '1' : '0';
+
+      await env.db
+        .prepare(
+          `INSERT INTO app_settings (key, value, updated_at)
+           VALUES ('survey_enabled', ?, strftime('%Y-%m-%d %H:%M:%f', 'now'))
+           ON CONFLICT(key) DO UPDATE SET
+             value = excluded.value,
+             updated_at = excluded.updated_at`
+        )
+        .bind(val)
+        .run();
+
+      return jsonResponse({ success: true, surveyEnabled }, 200, corsHeaders);
+    }
+
     if (method === 'DELETE') {
       const targetUserId = parseInt(url.searchParams.get('userId'), 10);
       if (!Number.isInteger(targetUserId) || targetUserId <= 0) {
@@ -196,7 +221,7 @@ export async function onRequest(context) {
 }
 
 async function collectSurveyAnalytics(env) {
-  const [subsRes, setsRes, fbRes, recsRes] = await env.db.batch([
+  const [subsRes, setsRes, fbRes, recsRes, settingRow] = await env.db.batch([
     env.db.prepare(`
       SELECT
         s.id,
@@ -239,12 +264,14 @@ async function collectSurveyAnalytics(env) {
       FROM user_recommendations r
       JOIN movies m ON m.id = r.movie_id
     `),
+    env.db.prepare("SELECT value FROM app_settings WHERE key = 'survey_enabled'"),
   ]);
 
   const submissions = subsRes.results || [];
   const setRatings = setsRes.results || [];
   const feedbacks = fbRes.results || [];
   const allRecs = recsRes.results || [];
+  const surveyEnabled = (settingRow?.results?.[0]?.value ?? settingRow?.value) === '1';
   const totalSubmissions = submissions.length;
 
   // Grupa A: metryki na podstawie ocen uzytkownikow
@@ -365,6 +392,7 @@ async function collectSurveyAnalytics(env) {
   }
 
   return {
+    surveyEnabled,
     totalSubmissions,
     groupA,
     askAi,

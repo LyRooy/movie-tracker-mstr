@@ -26,6 +26,7 @@ class MovieTracker {
         this._surveyData = null;
         this._surveyState = null;
         this._surveySubmitting = false;
+        this._adminSurveyEnabled = false;
         this._onboardingSelected = new Map();
         this._onboardingMoviesCache = new Map();
         this._onboardingSearchTimer = null;
@@ -56,10 +57,11 @@ class MovieTracker {
         await this.loadMoviesData();
         this.setupTheme();
 
-        // Pokaż modal onboardingu nowym użytkownikom tylko raz na sesję
+        // Pokaż modal onboardingu nowym użytkownikom tylko raz na sesję (per userId)
+        const favModalKey = this.currentUser?.id ? `favorites_modal_shown_${this.currentUser.id}` : 'favorites_modal_shown';
         if (this.currentUser && !this.currentUser.favorites_selected
-                && !sessionStorage.getItem('favorites_modal_shown')) {
-            sessionStorage.setItem('favorites_modal_shown', '1');
+                && !sessionStorage.getItem(favModalKey)) {
+            sessionStorage.setItem(favModalKey, '1');
             await this.showFavoritesModal();
         }
 
@@ -5641,6 +5643,13 @@ class MovieTracker {
         // Opóźnij reload, żeby użytkownik zobaczyl powiadomienie
         setTimeout(() => {
             localStorage.removeItem('movieTrackerToken');
+            try {
+                sessionStorage.removeItem('favorites_modal_shown');
+                sessionStorage.removeItem('favorites_banner_dismissed');
+                if (this.currentUser?.id) {
+                    sessionStorage.removeItem(`favorites_modal_shown_${this.currentUser.id}`);
+                }
+            } catch {}
             location.reload();
         }, 1000);
     }
@@ -5760,6 +5769,10 @@ class MovieTracker {
         const adminSurveySyncBtn = document.getElementById('admin-survey-sync-btn');
         if (adminSurveySyncBtn) {
             adminSurveySyncBtn.addEventListener('click', () => this.syncAdminSurveyToServer());
+        }
+        const adminSurveyToggleBtn = document.getElementById('admin-survey-toggle-btn');
+        if (adminSurveyToggleBtn) {
+            adminSurveyToggleBtn.addEventListener('click', () => this.toggleAdminSurveySession());
         }
         document.querySelectorAll('.admin-survey-csv-btn').forEach(btn => {
             btn.addEventListener('click', () => {
@@ -7282,6 +7295,13 @@ class MovieTracker {
                 throw new Error(data.error || 'Nie udało się załadować ankiety.');
             }
 
+            if (data.surveyEnabled === false) {
+                this._surveyData = null;
+                this._surveyState = null;
+                this.renderSurveyLocked();
+                return;
+            }
+
             if (data.submitted) {
                 this._surveyData = null;
                 this._surveyState = null;
@@ -7345,6 +7365,48 @@ class MovieTracker {
             console.error('loadSurvey error:', err);
             container.innerHTML = `<div class="survey-empty-card"><i class="fas fa-exclamation-triangle"></i><h3>Błąd ładowania ankiety</h3><p>${this.escapeHtml(err.message)}</p></div>`;
         }
+    }
+
+    renderSurveyLocked() {
+        const container = document.getElementById('survey-content');
+        const progressEl = document.getElementById('survey-progress-summary');
+        if (progressEl) progressEl.style.display = 'none';
+        if (!container) return;
+
+        const skeletonSets = ['A', 'B', 'C', 'D'].map((label) => `
+            <article class="survey-set-card">
+                <div class="survey-set-header">
+                    <h2><i class="fas fa-layer-group"></i> Zestaw ${label}</h2>
+                    <span class="survey-set-badge">Zablokowany</span>
+                </div>
+                <div class="survey-locked-placeholder-cards">
+                    <div class="survey-locked-placeholder-card"></div>
+                    <div class="survey-locked-placeholder-card"></div>
+                    <div class="survey-locked-placeholder-card"></div>
+                    <div class="survey-locked-placeholder-card"></div>
+                    <div class="survey-locked-placeholder-card"></div>
+                </div>
+            </article>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="survey-locked-wrap">
+                <div class="survey-locked-banner">
+                    <i class="fas fa-lock"></i>
+                    <h2>Sesja ankiet jeszcze nie rozpoczęta</h2>
+                    <p>
+                        Administrator nie uruchomił jeszcze etapu oceny rekomendacji.
+                        W międzyczasie oceniaj filmy na stronie oraz przetestuj czat "Zapytaj AI" w prawym dolnym rogu, a gdy tura oceny wystartuje, formularz ankiety odblokuje się w tym miejscu.
+                    </p>
+                    <button type="button" class="btn btn-primary" onclick="app.showSection('dashboard')">
+                        Wróć do Dashboardu
+                    </button>
+                </div>
+                <div class="survey-locked-preview" aria-hidden="true">
+                    ${skeletonSets}
+                </div>
+            </div>
+        `;
     }
 
     renderSurveyCompleted(submission) {
@@ -7787,6 +7849,11 @@ class MovieTracker {
             });
 
             const data = await res.json().catch(() => ({}));
+            if (res.status === 403 || data.surveyLocked) {
+                this.showNotification(data.error || 'Sesja ankiet jest obecnie zablokowana.', 'info');
+                await this.loadSurvey();
+                return;
+            }
             if (res.status === 409 || data.alreadySubmitted) {
                 this._clearSurveyDraft();
                 this.showNotification(data.error || 'Ankieta została już wcześniej wysłana.', 'info');
@@ -7835,6 +7902,9 @@ class MovieTracker {
     }
 
     renderAdminSurvey(data) {
+        this._adminSurveyEnabled = Boolean(data.surveyEnabled);
+        this._updateAdminSurveyLockUi();
+
         const container = document.getElementById('admin-survey-content');
         if (!container) return;
 
@@ -7992,6 +8062,69 @@ class MovieTracker {
                 this.resetUserSurvey(Number(btn.dataset.userId), btn.dataset.nickname);
             });
         });
+    }
+
+    _updateAdminSurveyLockUi() {
+        const badge = document.getElementById('admin-survey-status-badge');
+        const hint = document.getElementById('admin-survey-status-hint');
+        const btn = document.getElementById('admin-survey-toggle-btn');
+
+        if (badge) {
+            badge.classList.toggle('is-open', this._adminSurveyEnabled);
+            badge.classList.toggle('is-locked', !this._adminSurveyEnabled);
+            badge.innerHTML = this._adminSurveyEnabled
+                ? '<i class="fas fa-unlock"></i> Sesja ankiet: Odblokowana'
+                : '<i class="fas fa-lock"></i> Sesja ankiet: Zablokowana';
+        }
+        if (hint) {
+            hint.textContent = this._adminSurveyEnabled
+                ? 'Wszyscy użytkownicy z wygenerowanymi rekomendacjami mogą teraz wypełnić ankietę.'
+                : 'Użytkownicy widzą ekran oczekiwania i nie mogą wypełnić ankiety.';
+        }
+        if (btn) {
+            btn.classList.toggle('btn-danger', this._adminSurveyEnabled);
+            btn.classList.toggle('btn-primary', !this._adminSurveyEnabled);
+            btn.innerHTML = this._adminSurveyEnabled
+                ? '<i class="fas fa-lock"></i> Zablokuj ankietę'
+                : '<i class="fas fa-unlock"></i> Odblokuj ankietę dla wszystkich';
+        }
+    }
+
+    async toggleAdminSurveySession() {
+        const nextState = !this._adminSurveyEnabled;
+        const msg = nextState
+            ? 'Czy chcesz odblokować ankietę dla wszystkich użytkowników? Upewnij się, że rekomendacje dla Tury 2 zostały już przeliczone.'
+            : 'Czy chcesz zablokować dostęp do ankiety dla użytkowników?';
+        const title = nextState ? 'Odblokowanie sesji ankiet' : 'Blokada sesji ankiet';
+
+        if (!(await this.showConfirm(msg, title))) return;
+
+        const btn = document.getElementById('admin-survey-toggle-btn');
+        if (btn) btn.disabled = true;
+
+        try {
+            const res = await fetch('/api/admin/survey', {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                body: JSON.stringify({ surveyEnabled: nextState }),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Nie udało się zmienić statusu ankiety.');
+
+            this._adminSurveyEnabled = Boolean(data.surveyEnabled);
+            this._updateAdminSurveyLockUi();
+            this.showNotification(
+                this._adminSurveyEnabled
+                    ? 'Ankieta została odblokowana dla wszystkich użytkowników!'
+                    : 'Ankieta została zablokowana.',
+                'success'
+            );
+        } catch (err) {
+            console.error('toggleAdminSurveySession error:', err);
+            this.showNotification(err.message || 'Błąd zmiany statusu ankiety.', 'error');
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     async downloadAdminSurveyCsv(dataset) {

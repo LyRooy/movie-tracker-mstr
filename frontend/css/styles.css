@@ -5962,6 +5962,121 @@ body.transitions-enabled * {
 }
 
 /* Panel Admina -> Ankieta */
+.admin-survey-session-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    padding: 0.85rem 1rem;
+    margin-bottom: 1rem;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--background-color);
+}
+
+.admin-survey-session-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.admin-survey-session-info small {
+    color: var(--text-secondary);
+    font-size: 0.82rem;
+}
+
+.admin-survey-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: fit-content;
+    padding: 0.22rem 0.65rem;
+    border-radius: 999px;
+    font-size: 0.82rem;
+    font-weight: 700;
+}
+
+.admin-survey-status-badge.is-locked {
+    background: rgba(231, 76, 60, 0.14);
+    color: #e74c3c;
+    border: 1px solid rgba(231, 76, 60, 0.35);
+}
+
+.admin-survey-status-badge.is-open {
+    background: rgba(46, 204, 113, 0.14);
+    color: #27ae60;
+    border: 1px solid rgba(46, 204, 113, 0.35);
+}
+
+.btn-danger {
+    background-color: #e74c3c;
+    color: #fff;
+    border-color: #e74c3c;
+}
+
+.btn-danger:hover {
+    background-color: #c0392b;
+    border-color: #c0392b;
+}
+
+.survey-locked-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 1.25rem;
+}
+
+.survey-locked-banner {
+    background: var(--surface-color);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 2rem 1.5rem;
+    text-align: center;
+    box-shadow: var(--shadow);
+}
+
+.survey-locked-banner i {
+    font-size: 2.6rem;
+    color: var(--text-secondary);
+    margin-bottom: 0.75rem;
+}
+
+.survey-locked-banner h2 {
+    margin: 0;
+}
+
+.survey-locked-banner p {
+    margin: 0.5rem auto 1.25rem;
+    max-width: 560px;
+    color: var(--text-secondary);
+    font-size: 0.94rem;
+}
+
+.survey-locked-preview {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+    opacity: 0.38;
+    filter: grayscale(1);
+    pointer-events: none;
+    user-select: none;
+}
+
+.survey-locked-placeholder-cards {
+    display: flex;
+    gap: 0.8rem;
+    overflow: hidden;
+}
+
+.survey-locked-placeholder-card {
+    width: 145px;
+    height: 245px;
+    flex-shrink: 0;
+    border-radius: 10px;
+    border: 1px solid var(--border-color);
+    background: var(--background-color);
+}
+
 .admin-survey-actions {
     display: flex;
     flex-wrap: wrap;

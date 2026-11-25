@@ -681,6 +681,17 @@
 
                 <!-- Zakładka Wyników Ankiety -->
                 <div id="admin-survey-tab" class="admin-tab-content">
+                    <div class="admin-survey-session-bar">
+                        <div class="admin-survey-session-info">
+                            <span id="admin-survey-status-badge" class="admin-survey-status-badge is-locked">
+                                <i class="fas fa-lock"></i> Sesja ankiet: Zablokowana
+                            </span>
+                            <small id="admin-survey-status-hint">Użytkownicy widzą ekran oczekiwania i nie mogą wypełnić ankiety.</small>
+                        </div>
+                        <button type="button" id="admin-survey-toggle-btn" class="btn btn-primary btn-sm">
+                            <i class="fas fa-unlock"></i> Odblokuj ankietę dla wszystkich
+                        </button>
+                    </div>
                     <div class="admin-actions admin-survey-actions">
                         <button type="button" id="admin-survey-refresh-btn" class="btn btn-primary btn-sm">
                             <i class="fas fa-sync-alt"></i> Odśwież dane
