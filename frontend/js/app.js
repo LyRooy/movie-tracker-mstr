@@ -7410,7 +7410,7 @@ class MovieTracker {
                     <h2>Sesja ankiet jeszcze nie rozpoczęta</h2>
                     <p>
                         Administrator nie uruchomił jeszcze etapu oceny rekomendacji.
-                        W międzyczasie oceniaj filmy na stronie oraz przetestuj czat "Zapytaj AI" w prawym dolnym rogu, a gdy tura oceny wystartuje, formularz ankiety odblokuje się w tym miejscu.
+                        W międzyczasie dodawaj i oceniaj obejrzane filmy oraz seriale na stronie. Gdy rozpocznie się etap oceny, formularz ankiety odblokuje się automatycznie w tym miejscu.
                     </p>
                     <button type="button" class="btn btn-primary" onclick="app.showSection('dashboard')">
                         Wróć do Dashboardu
