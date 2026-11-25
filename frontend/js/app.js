@@ -5305,23 +5305,37 @@ class MovieTracker {
             });
         });
 
-        listEl.querySelectorAll('.onboarding-star-btn').forEach(btn => {
-            btn.addEventListener('click', () => {
-                const id = Number(btn.dataset.movieId);
-                const val = Number(btn.dataset.rating);
-                const item = this._onboardingSelected.get(id);
-                if (!item || !item.addToWatched) return;
-                item.rating = item.rating === val ? 0 : val;
+        const highlightOnboardingStars = (starsWrap, count) => {
+            if (!starsWrap) return;
+            starsWrap.querySelectorAll('.onboarding-star-btn').forEach(b => {
+                b.classList.toggle('active', Number(b.dataset.rating) <= count);
+            });
+        };
 
-                const row = listEl.querySelector(`.onboarding-rate-row[data-rate-row="${id}"]`);
-                if (row) {
-                    row.querySelectorAll('.onboarding-star-btn').forEach(b => {
-                        b.classList.toggle('active', Number(b.dataset.rating) <= item.rating);
-                    });
-                    const lbl = row.querySelector(`[data-rating-label="${id}"]`);
+        listEl.querySelectorAll('.onboarding-stars').forEach(starsWrap => {
+            const id = Number(starsWrap.dataset.movieId);
+            starsWrap.querySelectorAll('.onboarding-star-btn').forEach(btn => {
+                btn.addEventListener('mouseenter', () => {
+                    const item = this._onboardingSelected.get(id);
+                    if (!item || !item.addToWatched) return;
+                    highlightOnboardingStars(starsWrap, Number(btn.dataset.rating));
+                });
+                btn.addEventListener('click', () => {
+                    const val = Number(btn.dataset.rating);
+                    const item = this._onboardingSelected.get(id);
+                    if (!item || !item.addToWatched) return;
+                    item.rating = item.rating === val ? 0 : val;
+
+                    highlightOnboardingStars(starsWrap, item.rating);
+                    const row = listEl.querySelector(`.onboarding-rate-row[data-rate-row="${id}"]`);
+                    const lbl = row?.querySelector(`[data-rating-label="${id}"]`);
                     if (lbl) lbl.textContent = item.rating > 0 ? `Twoja ocena: ${item.rating}/5` : 'Brak oceny (opcjonalnie)';
-                }
-                this._updateFavoritesCount();
+                    this._updateFavoritesCount();
+                });
+            });
+            starsWrap.addEventListener('mouseleave', () => {
+                const item = this._onboardingSelected.get(id);
+                highlightOnboardingStars(starsWrap, item ? item.rating : 0);
             });
         });
 
