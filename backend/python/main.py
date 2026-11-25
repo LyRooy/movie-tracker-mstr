@@ -3,6 +3,7 @@ import sys
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from api.recommendations import router as recommendations_router
+from api.survey import router as survey_router
 from services.admin import router as admin_router
 
 # Pobranie klucza z pamięci RAM kontenera
@@ -21,8 +22,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Endpointy rekomendacji (cf/cb).
+# Endpointy rekomendacji (cf/cb/llm/hybrid/ask-ai).
 app.include_router(recommendations_router)
+
+# Endpointy kopii zapasowej ankiet i pomiaru opoznien.
+app.include_router(survey_router)
 
 # Endpointy panelu admina (status/postep modeli).
 app.include_router(admin_router)

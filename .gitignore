@@ -49,3 +49,6 @@ backend/python/models/*.npy
 backend/python/models/*.npz
 backend/python/models/embeddings_meta.json
 backend/python/models/*.tmp
+
+# Ignoruj wyniki ankiet i logi opoznien zapisywane na serwerze
+backend/python/survey_results/

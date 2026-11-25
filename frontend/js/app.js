@@ -23,6 +23,9 @@ class MovieTracker {
         this._recalcQueued = false;
         this._askAiLoading = false;
         this._showRecModels = localStorage.getItem('admin_show_rec_models') === '1';
+        this._surveyData = null;
+        this._surveyState = null;
+        this._surveySubmitting = false;
         
         // Właściwości kalendarza
         const now = new Date();
@@ -114,22 +117,78 @@ class MovieTracker {
     }
     // ============= BIND EVENTS =============
     bindEvents() {
+        const closeNavDropdowns = () => {
+            document.querySelectorAll('.nav-dropdown.open').forEach(dd => {
+                dd.classList.remove('open');
+                const toggle = dd.querySelector('.nav-dropdown-toggle');
+                if (toggle) toggle.setAttribute('aria-expanded', 'false');
+            });
+        };
+
+        const closeMobileMenu = () => {
+            const navMenu = document.querySelector('.nav-menu');
+            const hamburger = document.querySelector('.hamburger');
+            if (navMenu && navMenu.classList.contains('active')) {
+                navMenu.classList.remove('active');
+                if (hamburger) {
+                    hamburger.classList.remove('active');
+                }
+            }
+        };
+
+        // Klikniecie w logo przenosi do Dashboardu
+        const navLogo = document.getElementById('nav-logo');
+        if (navLogo) {
+            const goDashboard = () => {
+                this.showSection('dashboard');
+                closeNavDropdowns();
+                closeMobileMenu();
+            };
+            navLogo.addEventListener('click', goDashboard);
+            navLogo.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    goDashboard();
+                }
+            });
+        }
+
+        // Rozwijane listy zakladek w pasku nawigacji
+        document.querySelectorAll('.nav-dropdown-toggle').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const parent = btn.closest('.nav-dropdown');
+                if (!parent) return;
+                const willOpen = !parent.classList.contains('open');
+                closeNavDropdowns();
+                if (willOpen) {
+                    parent.classList.add('open');
+                    btn.setAttribute('aria-expanded', 'true');
+                }
+            });
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.nav-dropdown')) {
+                closeNavDropdowns();
+            }
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeNavDropdowns();
+            }
+        });
+
         // Nawigacja
         document.querySelectorAll('.nav-link').forEach(link => {
             link.addEventListener('click', (e) => {
                 e.preventDefault();
                 const section = link.getAttribute('href').substring(1);
                 this.showSection(section);
-
-                // Zamknij menu mobilne po kliknięciu w link
-                const navMenu = document.querySelector('.nav-menu');
-                const hamburger = document.querySelector('.hamburger');
-                if (navMenu && navMenu.classList.contains('active')) {
-                    navMenu.classList.remove('active');
-                    if (hamburger) {
-                        hamburger.classList.remove('active');
-                    }
-                }
+                closeNavDropdowns();
+                closeMobileMenu();
             });
         });
 
@@ -455,8 +514,16 @@ class MovieTracker {
 
         // Zaktualizuj nawigację (bezpiecznie)
         document.querySelectorAll('.nav-link').forEach(link => link.classList.remove('active'));
-        const navLink = document.querySelector(`[href="#${sectionName}"]`);
-        if (navLink) navLink.classList.add('active');
+        document.querySelectorAll('.nav-dropdown-toggle').forEach(btn => btn.classList.remove('active'));
+        const navLink = document.querySelector(`.nav-link[href="#${sectionName}"]`);
+        if (navLink) {
+            navLink.classList.add('active');
+            const parentDropdown = navLink.closest('.nav-dropdown');
+            if (parentDropdown) {
+                const toggle = parentDropdown.querySelector('.nav-dropdown-toggle');
+                if (toggle) toggle.classList.add('active');
+            }
+        }
 
         // Ładuj dane specyficzne dla sekcji
         if (sectionName === 'statistics') {
@@ -467,6 +534,8 @@ class MovieTracker {
             this.loadProfileData();
         } else if (sectionName === 'challenges') {
             this.loadChallenges();
+        } else if (sectionName === 'survey') {
+            this.loadSurvey();
         } else if (sectionName === 'admin') {
             this.loadAdminData();
         }
@@ -2659,16 +2728,16 @@ class MovieTracker {
                 }
             } else {
                 console.warn('Błąd przeliczania rekomendacji:', response.status);
-                this._renderRecUpdatedAt(this._lastRecUpdatedAt);
             }
         } catch (e) {
             console.warn('Błąd wywołania Workera:', e);
-            this._renderRecUpdatedAt(this._lastRecUpdatedAt);
         } finally {
             this._isRecalculating = false;
             if (this._recalcQueued) {
                 this._recalcQueued = false;
                 shouldRestart = true;
+            } else {
+                this._renderRecUpdatedAt(this._lastRecUpdatedAt);
             }
         }
 
@@ -5406,6 +5475,21 @@ class MovieTracker {
             e.preventDefault();
             this.saveAdminBadge();
         });
+
+        const adminSurveyRefreshBtn = document.getElementById('admin-survey-refresh-btn');
+        if (adminSurveyRefreshBtn) {
+            adminSurveyRefreshBtn.addEventListener('click', () => this.loadAdminSurvey());
+        }
+        const adminSurveySyncBtn = document.getElementById('admin-survey-sync-btn');
+        if (adminSurveySyncBtn) {
+            adminSurveySyncBtn.addEventListener('click', () => this.syncAdminSurveyToServer());
+        }
+        document.querySelectorAll('.admin-survey-csv-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const dataset = btn.dataset.dataset || 'metrics';
+                this.downloadAdminSurveyCsv(dataset);
+            });
+        });
     }
 
     switchAdminTab(tab) {
@@ -5413,19 +5497,22 @@ class MovieTracker {
         document.querySelectorAll('.admin-tab-btn').forEach(btn => {
             btn.classList.remove('active');
         });
-        document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+        const targetTabBtn = document.querySelector(`.admin-tab-btn[data-tab="${tab}"]`);
+        if (targetTabBtn) targetTabBtn.classList.add('active');
 
         // Zaktualizuj zawartość zakładki
         document.querySelectorAll('.admin-tab-content').forEach(content => {
             content.classList.remove('active');
         });
-        document.getElementById(`admin-${tab}-tab`).classList.add('active');
+        const targetTabContent = document.getElementById(`admin-${tab}-tab`);
+        if (targetTabContent) targetTabContent.classList.add('active');
 
         // Załaduj dane dla wybranej zakładki
         if (tab === 'movies') this.loadAdminMovies();
         else if (tab === 'challenges') this.loadAdminChallenges();
         else if (tab === 'badges') this.loadAdminBadges();
         else if (tab === 'reviews') this.loadAdminReviews();
+        else if (tab === 'survey') this.loadAdminSurvey();
     }
 
     async loadAdminData() {
@@ -6865,6 +6952,831 @@ class MovieTracker {
         await this.loadAdminReviews();
         document.getElementById('select-all-reviews').checked = false;
         this.updateBulkDeleteButton('reviews');
+    }
+
+    // ============= ANKIETA EWALUACYJNA (SLEPY TEST A/B/C/D) =============
+    _getSurveyDraftKey() {
+        const uid = this.currentUser?.id || 'anon';
+        return `mvt_survey_draft_${uid}`;
+    }
+
+    _saveSurveyDraft() {
+        if (!this._surveyState) return;
+        try {
+            localStorage.setItem(this._getSurveyDraftKey(), JSON.stringify(this._surveyState));
+        } catch {}
+    }
+
+    _clearSurveyDraft() {
+        try {
+            localStorage.removeItem(this._getSurveyDraftKey());
+        } catch {}
+    }
+
+    _createEmptySurveyState(sets) {
+        const setRatings = {};
+        (sets || []).forEach((s) => {
+            setRatings[s.label] = { relevance: null, novelty: null, diversity: null };
+        });
+        return {
+            feedback: {},
+            setRatings,
+            winnerLabel: '',
+            askAiUsed: true,
+            askAiRating: null,
+            askAiComment: '',
+            generalComment: '',
+        };
+    }
+
+    async loadSurvey() {
+        const container = document.getElementById('survey-content');
+        const progressEl = document.getElementById('survey-progress-summary');
+        if (!container) return;
+
+        container.innerHTML = '<div class="survey-loading"><i class="fas fa-spinner fa-spin"></i> Przygotowuję ankietę...</div>';
+        if (progressEl) progressEl.style.display = 'none';
+
+        try {
+            const res = await fetch('/api/survey', { headers: this.getAuthHeaders() });
+            const data = await res.json();
+
+            if (!res.ok) {
+                throw new Error(data.error || 'Nie udało się załadować ankiety.');
+            }
+
+            if (data.submitted) {
+                this._surveyData = null;
+                this._surveyState = null;
+                this._clearSurveyDraft();
+                this.renderSurveyCompleted(data.submission);
+                return;
+            }
+
+            if (!data.ready || !Array.isArray(data.sets) || data.sets.length === 0) {
+                this._surveyData = null;
+                this._surveyState = null;
+                this.renderSurveyNotReady();
+                return;
+            }
+
+            this._surveyData = data;
+            const fresh = this._createEmptySurveyState(data.sets);
+
+            try {
+                const rawDraft = localStorage.getItem(this._getSurveyDraftKey());
+                if (rawDraft) {
+                    const parsed = JSON.parse(rawDraft);
+                    if (parsed && typeof parsed === 'object') {
+                        if (parsed.feedback && typeof parsed.feedback === 'object') {
+                            fresh.feedback = parsed.feedback;
+                        }
+                        if (parsed.setRatings && typeof parsed.setRatings === 'object') {
+                            data.sets.forEach((s) => {
+                                const savedSr = parsed.setRatings[s.label];
+                                if (savedSr) {
+                                    fresh.setRatings[s.label] = {
+                                        relevance: savedSr.relevance || null,
+                                        novelty: savedSr.novelty || null,
+                                        diversity: savedSr.diversity || null,
+                                    };
+                                }
+                            });
+                        }
+                        if (data.sets.some((s) => s.label === parsed.winnerLabel)) {
+                            fresh.winnerLabel = parsed.winnerLabel;
+                        }
+                        if (typeof parsed.askAiUsed === 'boolean') {
+                            fresh.askAiUsed = parsed.askAiUsed;
+                        }
+                        if (parsed.askAiRating >= 1 && parsed.askAiRating <= 5) {
+                            fresh.askAiRating = parsed.askAiRating;
+                        }
+                        if (typeof parsed.askAiComment === 'string') {
+                            fresh.askAiComment = parsed.askAiComment;
+                        }
+                        if (typeof parsed.generalComment === 'string') {
+                            fresh.generalComment = parsed.generalComment;
+                        }
+                    }
+                }
+            } catch {}
+
+            this._surveyState = fresh;
+            this.renderSurveyForm();
+        } catch (err) {
+            console.error('loadSurvey error:', err);
+            container.innerHTML = `<div class="survey-empty-card"><i class="fas fa-exclamation-triangle"></i><h3>Błąd ładowania ankiety</h3><p>${this.escapeHtml(err.message)}</p></div>`;
+        }
+    }
+
+    renderSurveyCompleted(submission) {
+        const container = document.getElementById('survey-content');
+        const progressEl = document.getElementById('survey-progress-summary');
+        if (progressEl) progressEl.style.display = 'none';
+        if (!container) return;
+
+        const submittedDate = submission?.createdAt
+            ? new Date(submission.createdAt).toLocaleString('pl-PL')
+            : '';
+
+        container.innerHTML = `
+            <div class="survey-done-card">
+                <i class="fas fa-check-circle"></i>
+                <h2>Dziękujemy za wypełnienie ankiety!</h2>
+                <p style="margin-top: 0.5rem; color: var(--text-secondary);">
+                    Twoja odpowiedź została zapisana w bazie danych oraz zabezpieczona na serwerze.
+                    Aby zapewnić wiarygodność badania, każde konto może wysłać ankietę tylko raz.
+                </p>
+                ${submission?.winnerLabel ? `<p style="margin-top: 0.85rem; font-weight: 600;">Wskazany zwycięzca: Zestaw ${this.escapeHtml(submission.winnerLabel)}</p>` : ''}
+                ${submittedDate ? `<p style="margin-top: 0.25rem; font-size: 0.85rem; color: var(--text-secondary);">Data wysłania: ${this.escapeHtml(submittedDate)}</p>` : ''}
+                <div style="margin-top: 1.4rem;">
+                    <button type="button" class="btn btn-primary" onclick="app.showSection('dashboard')">Wróć do Dashboardu</button>
+                </div>
+            </div>
+        `;
+    }
+
+    renderSurveyNotReady() {
+        const container = document.getElementById('survey-content');
+        const progressEl = document.getElementById('survey-progress-summary');
+        if (progressEl) progressEl.style.display = 'none';
+        if (!container) return;
+
+        container.innerHTML = `
+            <div class="survey-empty-card">
+                <i class="fas fa-film"></i>
+                <h2>Brak list rekomendacji do oceny</h2>
+                <p style="margin-top: 0.5rem; color: var(--text-secondary);">
+                    Aby wziąć udział w ankiecie, musisz najpierw mieć wygenerowane własne listy rekomendacji.
+                    Oceń kilka filmów w Dashboardzie lub Mojej Liście, a następnie wróć tutaj.
+                </p>
+                <div style="margin-top: 1.4rem; display: flex; justify-content: center; gap: 0.75rem; flex-wrap: wrap;">
+                    <button type="button" class="btn btn-primary" onclick="app.showSection('dashboard')">Przejdź do Dashboardu</button>
+                </div>
+            </div>
+        `;
+    }
+
+    _scrollSurveyTrack(label, direction) {
+        const track = document.querySelector(`.survey-track[data-set-label="${label}"]`);
+        if (!track) return;
+        const card = track.querySelector('.survey-movie-card');
+        const step = card ? (card.offsetWidth + 13) * 2 : 320;
+        track.scrollBy({ left: direction * step, behavior: 'smooth' });
+    }
+
+    _updateSurveyProgress() {
+        const sets = this._surveyData?.sets || [];
+        const state = this._surveyState;
+        if (!sets.length || !state) return;
+
+        let totalMovies = 0;
+        let ratedMovies = 0;
+        let completedSets = 0;
+
+        sets.forEach((s) => {
+            const label = s.label;
+            const totalInSet = s.movies.length;
+            let ratedInSet = 0;
+            s.movies.forEach((m) => {
+                const key = `${label}:${m.id}`;
+                if (state.feedback[key] === true || state.feedback[key] === false) {
+                    ratedInSet++;
+                }
+            });
+            totalMovies += totalInSet;
+            ratedMovies += ratedInSet;
+
+            const sr = state.setRatings[label] || {};
+            const setRatingsDone = Boolean(sr.relevance && sr.novelty && sr.diversity);
+            const isSetDone = ratedInSet === totalInSet && setRatingsDone;
+            if (isSetDone) completedSets++;
+
+            const badge = document.querySelector(`.survey-set-badge[data-set-label="${label}"]`);
+            if (badge) {
+                badge.textContent = `${ratedInSet}/${totalInSet} filmów | oceny ${setRatingsDone ? 'OK' : 'brak'}`;
+                badge.classList.toggle('is-complete', isSetDone);
+            }
+        });
+
+        const progressEl = document.getElementById('survey-progress-summary');
+        if (progressEl) {
+            progressEl.style.display = 'inline-flex';
+            progressEl.innerHTML = `<i class="fas fa-tasks"></i> Zestawy: ${completedSets}/${sets.length} | Filmy: ${ratedMovies}/${totalMovies}`;
+        }
+    }
+
+    renderSurveyForm() {
+        const container = document.getElementById('survey-content');
+        const sets = this._surveyData?.sets || [];
+        const state = this._surveyState;
+        if (!container || !sets.length || !state) return;
+
+        const metricDefs = [
+            { key: 'relevance', label: 'Trafność pod gust', hint: '1 = zupełnie nietrafione, 5 = idealnie pod mój gust' },
+            { key: 'novelty', label: 'Odkrywczość (nowość)', hint: '1 = same oczywiste hity, 5 = świetne nieznane perełki' },
+            { key: 'diversity', label: 'Różnorodność propozycji', hint: '1 = bardzo monotonna lista, 5 = ciekawe zróżnicowanie' },
+        ];
+
+        const setsHtml = sets.map((s) => {
+            const label = this.escapeHtml(s.label);
+            const cardsHtml = s.movies.map((m) => {
+                const key = `${s.label}:${m.id}`;
+                const fb = state.feedback[key];
+                const poster = this.getPosterUrl(m);
+                const imdb = m.imdb_rating != null ? `<span>⭐ ${parseFloat(m.imdb_rating).toFixed(1)}</span>` : '<span></span>';
+                const genre = m.genre ? `<div class="survey-movie-genre">${this.escapeHtml(m.genre)}</div>` : '';
+
+                return `
+                    <div class="survey-movie-card" data-survey-card="${this.escapeHtml(key)}">
+                        <div class="survey-movie-clickable" data-movie-id="${m.id}" data-set-label="${label}" title="Kliknij, aby zobaczyć szczegóły filmu">
+                            <img src="${poster}" alt="${this.escapeHtml(m.title || '')}" loading="lazy">
+                            <div class="survey-movie-body">
+                                <div class="survey-movie-title">${this.escapeHtml(m.title || '')}</div>
+                                <div class="survey-movie-meta">${imdb}<span>#${m.rank ?? ''}</span></div>
+                                ${genre}
+                            </div>
+                        </div>
+                        <div class="survey-thumb-actions">
+                            <button type="button" class="survey-thumb-btn is-up ${fb === true ? 'active' : ''}" data-set-label="${label}" data-movie-id="${m.id}" data-vote="1" title="Pasuje / ciekawa propozycja">
+                                <i class="fas fa-thumbs-up"></i>
+                            </button>
+                            <button type="button" class="survey-thumb-btn is-down ${fb === false ? 'active' : ''}" data-set-label="${label}" data-movie-id="${m.id}" data-vote="0" title="Nie pasuje / nietrafione">
+                                <i class="fas fa-thumbs-down"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            const sr = state.setRatings[s.label] || {};
+            const ratingsHtml = metricDefs.map((def) => {
+                const currentVal = sr[def.key];
+                const btns = [1, 2, 3, 4, 5].map((n) => `
+                    <button type="button" class="survey-likert-btn ${currentVal === n ? 'active' : ''}" data-set-label="${label}" data-metric="${def.key}" data-value="${n}">${n}</button>
+                `).join('');
+                return `
+                    <div class="survey-metric-box">
+                        <span class="survey-metric-label">${def.label}</span>
+                        <span class="survey-metric-hint">${def.hint}</span>
+                        <div class="survey-likert-row">${btns}</div>
+                    </div>
+                `;
+            }).join('');
+
+            return `
+                <article class="survey-set-card" data-survey-set="${label}">
+                    <div class="survey-set-header">
+                        <h2><i class="fas fa-layer-group" style="color: var(--secondary-color);"></i> Zestaw ${label}</h2>
+                        <span class="survey-set-badge" data-set-label="${label}">0/${s.movies.length}</span>
+                    </div>
+                    <div class="survey-slider-container">
+                        <button type="button" class="for-you-arrow for-you-prev survey-arrow" data-set-label="${label}" data-dir="-1" aria-label="Poprzednie w zestawie ${label}">
+                            <i class="fas fa-chevron-left"></i>
+                        </button>
+                        <div class="survey-track" data-set-label="${label}">
+                            ${cardsHtml}
+                        </div>
+                        <button type="button" class="for-you-arrow for-you-next survey-arrow" data-set-label="${label}" data-dir="1" aria-label="Następne w zestawie ${label}">
+                            <i class="fas fa-chevron-right"></i>
+                        </button>
+                    </div>
+                    <div class="survey-set-ratings">
+                        ${ratingsHtml}
+                    </div>
+                </article>
+            `;
+        }).join('');
+
+        const winnerButtonsHtml = sets.map((s) => `
+            <button type="button" class="survey-winner-btn ${state.winnerLabel === s.label ? 'active' : ''}" data-winner="${this.escapeHtml(s.label)}">
+                Zestaw ${this.escapeHtml(s.label)}
+            </button>
+        `).join('');
+
+        const askAiLikertHtml = [1, 2, 3, 4, 5].map((n) => `
+            <button type="button" class="survey-likert-btn survey-ask-ai-btn ${state.askAiUsed && state.askAiRating === n ? 'active' : ''}" data-value="${n}" ${!state.askAiUsed ? 'disabled' : ''}>${n}</button>
+        `).join('');
+
+        container.innerHTML = `
+            <div class="survey-intro-card">
+                <h3>Instrukcja badania</h3>
+                <p>Poniżej widzisz <strong>${sets.length} anonimowe zestawy rekomendacji</strong> (kolejność modeli została losowo wymieszana specjalnie dla Twojego konta). Oceń każdy film przyciskiem 👍 lub 👎 (kliknięcie plakatu otwiera opis), wystaw 3 oceny dla każdego zestawu, a na końcu wskaż najlepszą listę oraz oceń czat <strong>"Zapytaj AI"</strong>. Postęp zapisuje się lokalnie automatycznie, a po wysłaniu ankieta jest przypisywana na stałe do konta.</p>
+            </div>
+
+            ${setsHtml}
+
+            <div class="survey-final-card" id="survey-final-card">
+                <div class="survey-question-block">
+                    <span class="survey-question-title">1. Który zestaw rekomendacji najbardziej Ci się spodobał?</span>
+                    <div class="survey-winner-options">
+                        ${winnerButtonsHtml}
+                    </div>
+                </div>
+
+                <div class="survey-question-block">
+                    <span class="survey-question-title">2. Jak oceniasz rekomendacje z czatu na żywo "Zapytaj AI" (ikona w prawym dolnym rogu)?</span>
+                    <div class="survey-ask-ai-controls">
+                        <div class="survey-likert-row">
+                            ${askAiLikertHtml}
+                        </div>
+                        <button type="button" id="survey-open-ask-ai-btn" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-comments"></i> Przetestuj "Zapytaj AI"
+                        </button>
+                        <label class="survey-ask-ai-skip">
+                            <input type="checkbox" id="survey-ask-ai-not-used" ${!state.askAiUsed ? 'checked' : ''}>
+                            <span>Nie korzystałem z "Zapytaj AI"</span>
+                        </label>
+                    </div>
+                    <textarea id="survey-ask-ai-comment" class="survey-textarea" placeholder="Napisz krótko, jak podobały Ci się rekomendacje i odpowiedzi z czatu na żywo LLM (np. trafność, szybkość, opisy)...">${this.escapeHtml(state.askAiComment || '')}</textarea>
+                </div>
+
+                <div class="survey-question-block">
+                    <span class="survey-question-title">3. Dodatkowe uwagi ogólne (opcjonalnie)</span>
+                    <textarea id="survey-general-comment" class="survey-textarea" placeholder="Wszelkie spostrzeżenia dotyczące rekomendacji lub działania aplikacji...">${this.escapeHtml(state.generalComment || '')}</textarea>
+                </div>
+
+                <div class="survey-submit-row">
+                    <span style="font-size: 0.85rem; color: var(--text-secondary);">Po wysłaniu ankiety nie można jej wypełnić ponownie.</span>
+                    <button type="button" id="survey-submit-btn" class="btn btn-primary">
+                        <i class="fas fa-paper-plane"></i> Wyślij ankietę
+                    </button>
+                </div>
+            </div>
+        `;
+
+        // Podpiecie zdarzen ankiety
+        const movieMap = new Map();
+        sets.forEach((s) => s.movies.forEach((m) => movieMap.set(`${s.label}:${m.id}`, m)));
+
+        container.querySelectorAll('.survey-movie-clickable').forEach((el) => {
+            el.addEventListener('click', () => {
+                const key = `${el.dataset.setLabel}:${el.dataset.movieId}`;
+                const movie = movieMap.get(key);
+                if (movie) this.openMovieModal(movie, false);
+            });
+        });
+
+        container.querySelectorAll('.survey-thumb-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const label = btn.dataset.setLabel;
+                const movieId = btn.dataset.movieId;
+                const vote = btn.dataset.vote === '1';
+                const key = `${label}:${movieId}`;
+                state.feedback[key] = vote;
+
+                const card = container.querySelector(`.survey-movie-card[data-survey-card="${key}"]`);
+                if (card) {
+                    card.classList.remove('is-unrated-highlight');
+                    const upBtn = card.querySelector('.survey-thumb-btn.is-up');
+                    const downBtn = card.querySelector('.survey-thumb-btn.is-down');
+                    if (upBtn) upBtn.classList.toggle('active', vote === true);
+                    if (downBtn) downBtn.classList.toggle('active', vote === false);
+                }
+                this._saveSurveyDraft();
+                this._updateSurveyProgress();
+            });
+        });
+
+        container.querySelectorAll('.survey-arrow').forEach((arrow) => {
+            arrow.addEventListener('click', () => {
+                const label = arrow.dataset.setLabel;
+                const dir = Number(arrow.dataset.dir) || 1;
+                this._scrollSurveyTrack(label, dir);
+            });
+        });
+
+        container.querySelectorAll('.survey-likert-btn:not(.survey-ask-ai-btn)').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const label = btn.dataset.setLabel;
+                const metric = btn.dataset.metric;
+                const value = Number(btn.dataset.value);
+                if (!state.setRatings[label]) state.setRatings[label] = {};
+                state.setRatings[label][metric] = value;
+
+                const row = btn.closest('.survey-likert-row');
+                if (row) {
+                    row.querySelectorAll('.survey-likert-btn').forEach((b) => {
+                        b.classList.toggle('active', Number(b.dataset.value) === value);
+                    });
+                }
+                const setCard = btn.closest('.survey-set-card');
+                if (setCard) setCard.classList.remove('has-error');
+                this._saveSurveyDraft();
+                this._updateSurveyProgress();
+            });
+        });
+
+        container.querySelectorAll('.survey-winner-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                state.winnerLabel = btn.dataset.winner;
+                container.querySelectorAll('.survey-winner-btn').forEach((b) => {
+                    b.classList.toggle('active', b.dataset.winner === state.winnerLabel);
+                });
+                this._saveSurveyDraft();
+            });
+        });
+
+        container.querySelectorAll('.survey-ask-ai-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                if (!state.askAiUsed) return;
+                const val = Number(btn.dataset.value);
+                state.askAiRating = val;
+                container.querySelectorAll('.survey-ask-ai-btn').forEach((b) => {
+                    b.classList.toggle('active', Number(b.dataset.value) === val);
+                });
+                this._saveSurveyDraft();
+            });
+        });
+
+        const askAiSkip = document.getElementById('survey-ask-ai-not-used');
+        if (askAiSkip) {
+            askAiSkip.addEventListener('change', (e) => {
+                state.askAiUsed = !e.target.checked;
+                container.querySelectorAll('.survey-ask-ai-btn').forEach((b) => {
+                    b.disabled = !state.askAiUsed;
+                    if (!state.askAiUsed) b.classList.remove('active');
+                    else b.classList.toggle('active', Number(b.dataset.value) === state.askAiRating);
+                });
+                this._saveSurveyDraft();
+            });
+        }
+
+        const openAskAiBtn = document.getElementById('survey-open-ask-ai-btn');
+        if (openAskAiBtn) {
+            openAskAiBtn.addEventListener('click', () => this.toggleAskAIDrawer(true));
+        }
+
+        const askAiCommentEl = document.getElementById('survey-ask-ai-comment');
+        if (askAiCommentEl) {
+            askAiCommentEl.addEventListener('input', (e) => {
+                state.askAiComment = e.target.value;
+                this._saveSurveyDraft();
+            });
+        }
+
+        const generalCommentEl = document.getElementById('survey-general-comment');
+        if (generalCommentEl) {
+            generalCommentEl.addEventListener('input', (e) => {
+                state.generalComment = e.target.value;
+                this._saveSurveyDraft();
+            });
+        }
+
+        const submitBtn = document.getElementById('survey-submit-btn');
+        if (submitBtn) {
+            submitBtn.addEventListener('click', () => this.submitSurvey());
+        }
+
+        this._updateSurveyProgress();
+    }
+
+    async submitSurvey() {
+        if (this._surveySubmitting) return;
+        const sets = this._surveyData?.sets || [];
+        const state = this._surveyState;
+        if (!sets.length || !state) return;
+
+        // Walidacja lokalna przed wyslaniem
+        for (const s of sets) {
+            for (const m of s.movies) {
+                const key = `${s.label}:${m.id}`;
+                if (state.feedback[key] !== true && state.feedback[key] !== false) {
+                    const card = document.querySelector(`.survey-movie-card[data-survey-card="${key}"]`);
+                    if (card) {
+                        card.classList.add('is-unrated-highlight');
+                        card.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+                    }
+                    this.showNotification(`Oceń film "${m.title}" (👍/👎) w Zestawie ${s.label}.`, 'error');
+                    return;
+                }
+            }
+            const sr = state.setRatings[s.label] || {};
+            if (!sr.relevance || !sr.novelty || !sr.diversity) {
+                const setCard = document.querySelector(`.survey-set-card[data-survey-set="${s.label}"]`);
+                if (setCard) {
+                    setCard.classList.add('has-error');
+                    setCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                }
+                this.showNotification(`Uzupełnij wszystkie 3 oceny (1-5) dla Zestawu ${s.label}.`, 'error');
+                return;
+            }
+        }
+
+        if (!state.winnerLabel) {
+            document.getElementById('survey-final-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            this.showNotification('Wybierz zwycięski zestaw rekomendacji.', 'error');
+            return;
+        }
+
+        if (state.askAiUsed && !state.askAiRating) {
+            document.getElementById('survey-final-card')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            this.showNotification('Oceń czat "Zapytaj AI" w skali 1-5 lub zaznacz, że z niego nie korzystałeś.', 'error');
+            return;
+        }
+
+        const movieFeedback = [];
+        sets.forEach((s) => {
+            s.movies.forEach((m) => {
+                movieFeedback.push({
+                    label: s.label,
+                    movieId: m.id,
+                    isRelevant: state.feedback[`${s.label}:${m.id}`] ? 1 : 0,
+                });
+            });
+        });
+
+        const submitBtn = document.getElementById('survey-submit-btn');
+        this._surveySubmitting = true;
+        if (submitBtn) {
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Zapisuję ankietę...';
+        }
+
+        try {
+            const res = await fetch('/api/survey', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', ...this.getAuthHeaders() },
+                body: JSON.stringify({
+                    winnerLabel: state.winnerLabel,
+                    setRatings: state.setRatings,
+                    movieFeedback,
+                    askAiUsed: state.askAiUsed,
+                    askAiRating: state.askAiUsed ? state.askAiRating : null,
+                    askAiComment: state.askAiComment || '',
+                    generalComment: state.generalComment || '',
+                }),
+            });
+
+            const data = await res.json().catch(() => ({}));
+            if (res.status === 409 || data.alreadySubmitted) {
+                this._clearSurveyDraft();
+                this.showNotification(data.error || 'Ankieta została już wcześniej wysłana.', 'info');
+                await this.loadSurvey();
+                return;
+            }
+            if (!res.ok) {
+                throw new Error(data.error || 'Nie udało się zapisać ankiety.');
+            }
+
+            this._clearSurveyDraft();
+            this.showNotification('Dziękujemy! Wyniki ankiety zostały zapisane.', 'success');
+            this.renderSurveyCompleted({
+                winnerLabel: state.winnerLabel,
+                askAiUsed: state.askAiUsed,
+                askAiRating: state.askAiRating,
+                createdAt: data.submittedAt || new Date().toISOString(),
+            });
+        } catch (err) {
+            console.error('submitSurvey error:', err);
+            this.showNotification(err.message || 'Błąd wysyłania ankiety.', 'error');
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = '<i class="fas fa-paper-plane"></i> Wyślij ankietę';
+            }
+        } finally {
+            this._surveySubmitting = false;
+        }
+    }
+
+    // ============= PANEL ADMINA: WYNIKI ANKIETY I METRYKI =============
+    async loadAdminSurvey() {
+        const container = document.getElementById('admin-survey-content');
+        if (!container) return;
+        container.innerHTML = '<div class="survey-loading"><i class="fas fa-spinner fa-spin"></i> Ładowanie wyników i metryk...</div>';
+
+        try {
+            const res = await fetch('/api/admin/survey', { headers: this.getAuthHeaders() });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.error || 'Błąd pobierania wyników ankiety.');
+            this.renderAdminSurvey(data);
+        } catch (err) {
+            console.error('loadAdminSurvey error:', err);
+            container.innerHTML = `<div class="survey-empty-card"><i class="fas fa-exclamation-triangle"></i><p>${this.escapeHtml(err.message)}</p></div>`;
+        }
+    }
+
+    renderAdminSurvey(data) {
+        const container = document.getElementById('admin-survey-content');
+        if (!container) return;
+
+        const fmt = (val, suffix = '') => (val !== null && val !== undefined ? `${val}${suffix}` : '-');
+        const models = [
+            'collaborative_filtering',
+            'content_based',
+            'llm_querec',
+            'hybrid_querec',
+        ];
+        const latModels = data.latency?.models || {};
+
+        const groupARows = models.map((m) => {
+            const a = data.groupA?.[m] || {};
+            return `
+                <tr>
+                    <td><strong>${this.escapeHtml(a.label || m)}</strong></td>
+                    <td>${a.wins ?? 0} (${fmt(a.winRatePct, '%')})</td>
+                    <td>${fmt(a.microPrecisionPct, '%')} <small style="color:var(--text-secondary);">(${a.thumbsUp ?? 0}/${(a.thumbsUp ?? 0) + (a.thumbsDown ?? 0)})</small></td>
+                    <td>${fmt(a.avgRelevance)}</td>
+                    <td>${fmt(a.avgNovelty)}</td>
+                    <td>${fmt(a.avgDiversity)}</td>
+                    <td>${a.ratedSets ?? 0}</td>
+                </tr>
+            `;
+        }).join('');
+
+        const groupBRows = models.map((m) => {
+            const b = data.groupB?.[m] || {};
+            const l = latModels[m] || {};
+            return `
+                <tr>
+                    <td><strong>${this.escapeHtml(b.label || m)}</strong></td>
+                    <td>${b.usersCount ?? 0}</td>
+                    <td>${b.catalogCoverage ?? 0} <small style="color:var(--text-secondary);">/ ${b.totalRecs ?? 0}</small></td>
+                    <td>${fmt(b.avgPopularity)} / ${fmt(b.medianPopularity)}</td>
+                    <td>${fmt(b.avgVoteCount)} / ${fmt(b.medianVoteCount)}</td>
+                    <td>${fmt(b.avgImdbRating)}</td>
+                    <td>${l.mean_ms != null ? `${l.mean_ms} ms (med. ${l.median_ms} ms, n=${l.count})` : '-'}</td>
+                </tr>
+            `;
+        }).join('');
+
+        const askAiLat = latModels.ask_ai;
+        const commentsHtml = (data.askAi?.comments || []).length
+            ? data.askAi.comments.map((c) => `
+                <div class="admin-survey-comment-item">
+                    <div style="display:flex; justify-content:space-between; gap:0.5rem; margin-bottom:0.3rem;">
+                        <strong>${this.escapeHtml(c.nickname)}</strong>
+                        <span style="color:var(--text-secondary); font-size:0.8rem;">Zapytaj AI: ${c.ask_ai_used ? `${c.ask_ai_rating ?? '-'}/5` : 'nie użyto'}</span>
+                    </div>
+                    ${c.ask_ai_comment ? `<p><strong>Czat AI:</strong> ${this.escapeHtml(c.ask_ai_comment)}</p>` : ''}
+                    ${c.general_comment ? `<p style="margin-top:0.2rem;"><strong>Uwagi ogólne:</strong> ${this.escapeHtml(c.general_comment)}</p>` : ''}
+                </div>
+            `).join('')
+            : '<p style="color:var(--text-secondary);">Brak komentarzy tekstowych od testerów.</p>';
+
+        const subRows = (data.submissions || []).length
+            ? data.submissions.map((s) => `
+                <tr>
+                    <td>${s.user_id}</td>
+                    <td>${this.escapeHtml(s.nickname || '-')}</td>
+                    <td><strong>Zestaw ${this.escapeHtml(s.winner_label)}</strong> (${this.escapeHtml(s.winner_model_label)})</td>
+                    <td>${s.ask_ai_used ? `${s.ask_ai_rating ?? '-'}/5` : 'Nie użyto'}</td>
+                    <td>${this.escapeHtml(new Date(s.created_at).toLocaleString('pl-PL'))}</td>
+                    <td>
+                        <button type="button" class="btn btn-secondary btn-sm admin-survey-reset-btn" data-user-id="${s.user_id}" data-nickname="${this.escapeHtml(s.nickname || `ID ${s.user_id}`)}">
+                            Resetuj
+                        </button>
+                    </td>
+                </tr>
+            `).join('')
+            : '<tr><td colspan="6" style="text-align:center; color:var(--text-secondary);">Brak wysłanych ankiet.</td></tr>';
+
+        container.innerHTML = `
+            <div class="admin-survey-summary-grid">
+                <div class="admin-survey-card">
+                    <div class="admin-survey-card-label">Wypełnione ankiety</div>
+                    <div class="admin-survey-card-value">${data.totalSubmissions ?? 0}</div>
+                </div>
+                <div class="admin-survey-card">
+                    <div class="admin-survey-card-label">Śr. ocena "Zapytaj AI"</div>
+                    <div class="admin-survey-card-value">${fmt(data.askAi?.avgRating, '/5')}</div>
+                </div>
+                <div class="admin-survey-card">
+                    <div class="admin-survey-card-label">Overlap CF vs LLM</div>
+                    <div class="admin-survey-card-value">${fmt(data.cfLlmOverlap?.avgOverlapPct, '%')}</div>
+                </div>
+                <div class="admin-survey-card">
+                    <div class="admin-survey-card-label">Serwer FastAPI (Latency)</div>
+                    <div class="admin-survey-card-value" style="font-size:1rem;">${data.latency?.serverOnline ? `Online (${data.latency.total_measurements ?? 0} pom.)` : 'Offline'}</div>
+                </div>
+            </div>
+
+            <h3 class="admin-survey-section-title">Grupa A: Oceny użytkowników (ślepy test)</h3>
+            <div class="admin-table-container">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Wygrane (Win Rate)</th>
+                            <th>Precision@k (👍/razem)</th>
+                            <th>Trafność (1-5)</th>
+                            <th>Odkrywczość (1-5)</th>
+                            <th>Różnorodność (1-5)</th>
+                            <th>Liczba zestawów</th>
+                        </tr>
+                    </thead>
+                    <tbody>${groupARows}</tbody>
+                </table>
+            </div>
+
+            <h3 class="admin-survey-section-title">Grupa B: Metryki automatyczne z D1 i czasy FastAPI</h3>
+            <div class="admin-table-container">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>Model</th>
+                            <th>Użytkownicy</th>
+                            <th>Pokrycie (unikalne / wszystkie)</th>
+                            <th>Popularity (śr. / med.)</th>
+                            <th>Vote count (śr. / med.)</th>
+                            <th>Śr. IMDb</th>
+                            <th>Latency (FastAPI)</th>
+                        </tr>
+                    </thead>
+                    <tbody>${groupBRows}</tbody>
+                </table>
+            </div>
+            ${askAiLat ? `<p style="margin-top:0.5rem; font-size:0.85rem; color:var(--text-secondary);">Czas "Zapytaj AI" (interaktywny): średnio ${askAiLat.mean_ms} ms, mediana ${askAiLat.median_ms} ms (n=${askAiLat.count}).</p>` : ''}
+
+            <h3 class="admin-survey-section-title">Komentarze do "Zapytaj AI" i uwagi testerów</h3>
+            <div class="admin-survey-comments-list">${commentsHtml}</div>
+
+            <h3 class="admin-survey-section-title">Lista zgłoszeń użytkowników</h3>
+            <div class="admin-table-container">
+                <table class="admin-table">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Użytkownik</th>
+                            <th>Zwycięzca</th>
+                            <th>Zapytaj AI</th>
+                            <th>Data</th>
+                            <th>Akcje</th>
+                        </tr>
+                    </thead>
+                    <tbody>${subRows}</tbody>
+                </table>
+            </div>
+        `;
+
+        container.querySelectorAll('.admin-survey-reset-btn').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                this.resetUserSurvey(Number(btn.dataset.userId), btn.dataset.nickname);
+            });
+        });
+    }
+
+    async downloadAdminSurveyCsv(dataset) {
+        try {
+            const res = await fetch(`/api/admin/survey?format=csv&dataset=${encodeURIComponent(dataset)}`, {
+                headers: this.getAuthHeaders(),
+            });
+            if (!res.ok) {
+                const err = await res.json().catch(() => ({}));
+                throw new Error(err.error || 'Błąd eksportu CSV.');
+            }
+            const blob = await res.blob();
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `survey_${dataset}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error('downloadAdminSurveyCsv error:', err);
+            this.showNotification(err.message || 'Nie udało się pobrać pliku CSV.', 'error');
+        }
+    }
+
+    async syncAdminSurveyToServer() {
+        try {
+            const res = await fetch('/api/admin/survey', {
+                method: 'POST',
+                headers: this.getAuthHeaders(),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Nie udało się zsynchronizować ankiet.');
+            this.showNotification(`Zsynchronizowano ${data.syncedCount ?? 0} ankiet z serwerem.`, 'success');
+            await this.loadAdminSurvey();
+        } catch (err) {
+            console.error('syncAdminSurveyToServer error:', err);
+            this.showNotification(err.message || 'Błąd synchronizacji z serwerem.', 'error');
+        }
+    }
+
+    async resetUserSurvey(userId, nickname) {
+        const ok = await this.showConfirm(
+            `Czy na pewno chcesz usunąć ankietę użytkownika ${nickname} (ID ${userId})? Po resecie użytkownik będzie mógł wypełnić ankietę ponownie.`,
+            'Reset ankiety'
+        );
+        if (!ok) return;
+
+        try {
+            const res = await fetch(`/api/admin/survey?userId=${encodeURIComponent(userId)}`, {
+                method: 'DELETE',
+                headers: this.getAuthHeaders(),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (!res.ok) throw new Error(data.error || 'Błąd resetowania ankiety.');
+            this.showNotification(`Zresetowano ankietę użytkownika ${nickname}.`, 'success');
+            await this.loadAdminSurvey();
+        } catch (err) {
+            console.error('resetUserSurvey error:', err);
+            this.showNotification(err.message || 'Nie udało się zresetować ankiety.', 'error');
+        }
     }
 
     // ============= ŁADOWANIE RECENZJI W MODALU =============

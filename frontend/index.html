@@ -17,17 +17,34 @@
 <body class="light-theme">
     <nav class="navbar">
         <div class="nav-container">
-            <div class="nav-logo">
+            <div id="nav-logo" class="nav-logo" role="button" tabindex="0" title="Przejdź do Dashboardu">
                 <i class="fas fa-film"></i>
                 <span>MovieTracker</span>
             </div>
             <ul class="nav-menu">
-                <li><a href="#dashboard" class="nav-link">Dashboard</a></li>
-                <li><a href="#my-list" class="nav-link">Moja Lista</a></li>
-                <li><a href="#search" class="nav-link">Wyszukaj</a></li>
-                <li><a href="#calendar" class="nav-link">Kalendarz</a></li>
-                <li><a href="#statistics" class="nav-link">Statystyki</a></li>
-                <li><a href="#challenges" class="nav-link">Wyzwania</a></li>
+                <li class="nav-dropdown">
+                    <button type="button" class="nav-dropdown-toggle" aria-expanded="false">
+                        <span>Filmy</span>
+                        <i class="fas fa-chevron-down nav-dropdown-caret"></i>
+                    </button>
+                    <ul class="nav-dropdown-menu">
+                        <li><a href="#dashboard" class="nav-link">Dashboard</a></li>
+                        <li><a href="#my-list" class="nav-link">Moja Lista</a></li>
+                        <li><a href="#search" class="nav-link">Wyszukaj</a></li>
+                    </ul>
+                </li>
+                <li class="nav-dropdown">
+                    <button type="button" class="nav-dropdown-toggle" aria-expanded="false">
+                        <span>Aktywność</span>
+                        <i class="fas fa-chevron-down nav-dropdown-caret"></i>
+                    </button>
+                    <ul class="nav-dropdown-menu">
+                        <li><a href="#statistics" class="nav-link">Statystyki</a></li>
+                        <li><a href="#calendar" class="nav-link">Kalendarz</a></li>
+                        <li><a href="#challenges" class="nav-link">Wyzwania</a></li>
+                    </ul>
+                </li>
+                <li><a href="#survey" class="nav-link">Ankieta</a></li>
                 <li id="admin-nav-item" style="display: none;"><a href="#admin" class="nav-link">Panel Admina</a></li>
             </ul>
             <div class="nav-user-actions">
@@ -524,6 +541,7 @@
                     <button class="admin-tab-btn" data-tab="challenges">Wyzwania</button>
                     <button class="admin-tab-btn" data-tab="badges">Odznaki</button>
                     <button class="admin-tab-btn" data-tab="reviews">Recenzje</button>
+                    <button class="admin-tab-btn" data-tab="survey">Ankieta</button>
                 </div>
 
                 <!-- Zakładka Zarządzania Filmami/Serialami -->
@@ -659,6 +677,44 @@
                             </tbody>
                         </table>
                     </div>
+                </div>
+
+                <!-- Zakładka Wyników Ankiety -->
+                <div id="admin-survey-tab" class="admin-tab-content">
+                    <div class="admin-actions admin-survey-actions">
+                        <button type="button" id="admin-survey-refresh-btn" class="btn btn-primary btn-sm">
+                            <i class="fas fa-sync-alt"></i> Odśwież dane
+                        </button>
+                        <button type="button" id="admin-survey-sync-btn" class="btn btn-secondary btn-sm">
+                            <i class="fas fa-cloud-upload-alt"></i> Synchronizuj kopię na serwer
+                        </button>
+                        <div class="admin-survey-csv-group">
+                            <span>Eksport CSV:</span>
+                            <button type="button" class="btn btn-secondary btn-sm admin-survey-csv-btn" data-dataset="metrics">Metryki (A+B)</button>
+                            <button type="button" class="btn btn-secondary btn-sm admin-survey-csv-btn" data-dataset="submissions">Zgłoszenia</button>
+                            <button type="button" class="btn btn-secondary btn-sm admin-survey-csv-btn" data-dataset="sets">Oceny zestawów</button>
+                            <button type="button" class="btn btn-secondary btn-sm admin-survey-csv-btn" data-dataset="feedback">Oceny filmów</button>
+                        </div>
+                    </div>
+                    <div id="admin-survey-content">
+                        <div class="survey-loading"><i class="fas fa-spinner fa-spin"></i> Ładowanie wyników ankiety...</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Sekcja Ankiety Ewaluacyjnej -->
+        <section id="survey" class="section">
+            <div class="container survey-container">
+                <div class="survey-page-header">
+                    <div>
+                        <h1>Ankieta oceny rekomendacji</h1>
+                        <p class="survey-page-subtitle">Ślepy test spersonalizowanych list filmowych oraz asystenta "Zapytaj AI".</p>
+                    </div>
+                    <div id="survey-progress-summary" class="survey-progress-pill" style="display: none;"></div>
+                </div>
+                <div id="survey-content">
+                    <!-- Zawartość ankiety renderowana dynamicznie -->
                 </div>
             </div>
         </section>

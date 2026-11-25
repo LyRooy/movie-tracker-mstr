@@ -1,10 +1,12 @@
 import os
+import time
 from fastapi import APIRouter, Depends, HTTPException, Security
 from fastapi.security.api_key import APIKeyHeader
 from pydantic import BaseModel, Field
 from surprise import Dataset, Reader
 from sklearn.metrics.pairwise import cosine_similarity
 
+from api.survey import record_latency
 from services.model_manager import RecommendationModelManager, tracker
 from services.llm_recommender import LLMVectorRecommender
 from database.db_manager import DatabaseManager
@@ -78,6 +80,7 @@ def _compute_cf_recommendations(
 
     source = "forced-recalculation" if force else "computed"
     result = {"source": source, "data": []}
+    t0 = time.perf_counter()
 
     if user_ratings is None or user_ratings.empty:
         result["message"] = (
@@ -161,6 +164,10 @@ def _compute_cf_recommendations(
 
     if top_cf:
         _persist_recommendations(user_id, top_cf, REC_TYPE_CF, "cf", "CF", force, result)
+        duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+        result["latency_ms"] = duration_ms
+        record_latency(user_id, REC_TYPE_CF, source, duration_ms, len(top_cf))
+        tracker.log("cf", "CF", f"Czas CF: {duration_ms:.1f} ms (user_id={user_id})")
 
     return result, cf_all_scores
 
@@ -177,6 +184,7 @@ def _compute_cb_recommendations(
 
     source = "forced-recalculation" if force else "computed"
     result = {"source": source, "data": []}
+    t0 = time.perf_counter()
 
     good_movies = []
     if user_ratings is not None and not user_ratings.empty:
@@ -242,6 +250,10 @@ def _compute_cb_recommendations(
                 )
 
             _persist_recommendations(user_id, cb_recs, REC_TYPE_CB, "cb", "CB", force, result)
+            duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+            result["latency_ms"] = duration_ms
+            record_latency(user_id, REC_TYPE_CB, source, duration_ms, len(cb_recs))
+            tracker.log("cb", "CB", f"Czas CB: {duration_ms:.1f} ms (user_id={user_id})")
 
     return result
 
@@ -290,6 +302,7 @@ def _compute_llm_and_hybrid_recommendations(
 
     tracker.start("llm", "LLM", f"Generowanie rekomendacji LLM i Hybrid (user_id={user_id})")
     try:
+        t_llm_start = time.perf_counter()
         queries, query_source = llm_recommender.generate_user_queries(
             user_ratings, watched_details, onboarding_movie_ids, movies_by_id, user_id=user_id
         )
@@ -314,12 +327,17 @@ def _compute_llm_and_hybrid_recommendations(
                     for score, m_id in top_llm_raw
                 ]
                 _persist_recommendations(user_id, llm_recs, REC_TYPE_LLM, "llm", "LLM", force, llm_result)
+                llm_ms = round((time.perf_counter() - t_llm_start) * 1000, 2)
+                llm_result["latency_ms"] = llm_ms
+                record_latency(user_id, REC_TYPE_LLM, source, llm_ms, len(llm_recs))
+                tracker.log("llm", "LLM", f"Czas LLM (QueRec + wektory): {llm_ms:.1f} ms (user_id={user_id})")
             else:
                 llm_result["message"] = "Brak pasujących filmów w indeksie wektorowym."
         else:
             tracker.record_count("llm", len(llm_cached))
 
         if not hybrid_cached:
+            t_hyb_start = time.perf_counter()
             hybrid_recs = llm_recommender.fuse_cf_and_llm(
                 cf_scores, llm_scores_map, query_vecs, top_k=10
             )
@@ -334,6 +352,10 @@ def _compute_llm_and_hybrid_recommendations(
                     hybrid_result,
                     record_count=False,
                 )
+                hyb_ms = round((time.perf_counter() - t_hyb_start) * 1000, 2)
+                hybrid_result["latency_ms"] = hyb_ms
+                record_latency(user_id, REC_TYPE_HYBRID, source, hyb_ms, len(hybrid_recs))
+                tracker.log("llm", "HYBRID", f"Czas fuzji HYBRID (CF + LLM): {hyb_ms:.1f} ms (user_id={user_id})")
             else:
                 hybrid_result["message"] = "Brak kandydatów do fuzji CF + LLM."
 
@@ -406,6 +428,7 @@ class AskAIRequest(BaseModel):
 @router.post("/{user_id}/ask-ai", dependencies=[Depends(verify_api_key)])
 def ask_ai(user_id: int, body: AskAIRequest):
     """Interaktywny tryb 'Zapytaj AI': filtry SQL z LLM + retrieval wektorowy wyłącznie na movies.db."""
+    t0 = time.perf_counter()
     prompt = body.prompt.strip()
     if len(prompt) < 2:
         raise HTTPException(status_code=400, detail="Zapytanie jest zbyt krótkie.")
@@ -480,10 +503,12 @@ def ask_ai(user_id: int, body: AskAIRequest):
             }
         )
 
+    duration_ms = round((time.perf_counter() - t0) * 1000, 2)
+    record_latency(user_id, "ask_ai", "interactive", duration_ms, len(results))
     tracker.log(
         "llm",
         "ASK-AI",
-        f"Zwrócono {len(results)} wyników dla user_id={user_id} | filtry={filters} | relaxed={relaxed_filters}",
+        f"Zwrócono {len(results)} wyników dla user_id={user_id} | filtry={filters} | relaxed={relaxed_filters} | czas={duration_ms:.1f}ms",
     )
 
     return {
@@ -494,5 +519,6 @@ def ask_ai(user_id: int, body: AskAIRequest):
         "semantic_query": semantic_query,
         "relaxed_filters": relaxed_filters,
         "count": len(results),
+        "latency_ms": duration_ms,
         "results": results,
     }
