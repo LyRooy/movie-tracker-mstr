@@ -5489,7 +5489,7 @@ class MovieTracker {
             const timeUntilExpiry = payload.exp - Date.now();
             const oneMinuteBeforeExpiry = timeUntilExpiry - (60 * 1000);
             
-            if (oneMinuteBeforeExpiry > 0) {
+            if (oneMinuteBeforeExpiry > 0 && oneMinuteBeforeExpiry <= 2147483647) {
                 setTimeout(() => {
                     if (!this.isTokenExpired(this.authToken)) {
                         alert('Twoja sesja wygaśnie za minutę. Zapisz swoją pracę.');

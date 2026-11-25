@@ -106,6 +106,6 @@ async function hashPassword(password) {
 
 // Generuj prosty token podobny do JWT
 async function generateSimpleToken(userId, email) {
-  const payload = { userId, email, exp: Date.now() + (12 * 60 * 60 * 1000) }; // 12 godzin
+  const payload = { userId, email, exp: Date.now() + (7 * 24 * 60 * 60 * 1000) }; // sesja 7 dni
   return btoa(JSON.stringify(payload));
 }
