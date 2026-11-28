@@ -212,14 +212,14 @@ class MovieTracker {
             container.appendChild(wrap);
         }
 
-        const currentGenre = document.getElementById('genre-filter')?.value || '';
+        const currentGenre = this._selectedSearchGenre || '';
         this.syncSearchGenreChips(currentGenre);
     }
 
     // Wypełnij pola wyboru gatunków na podstawie podanej tablicy wartości
     populateGenreFilterFromValues(values) {
         if (!Array.isArray(values)) return;
-        const selectIds = ['genre-filter', 'list-genre-filter'];
+        const selectIds = ['list-genre-filter'];
         selectIds.forEach(id => {
             const genreSelect = document.getElementById(id);
             if (!genreSelect) return;
@@ -384,7 +384,6 @@ class MovieTracker {
 
         // Filtry
         const typeFilter = document.getElementById('type-filter');
-        const genreFilter = document.getElementById('genre-filter');
         const yearFilter = document.getElementById('year-filter');
         const genreChipsContainer = document.getElementById('search-genre-chips');
         const resetFiltersBtn = document.getElementById('search-reset-filters');
@@ -392,13 +391,6 @@ class MovieTracker {
         if (typeFilter) {
             typeFilter.addEventListener('change', () => {
                 clearTimeout(this._liveSearchTimeout);
-                this.performSearch();
-            });
-        }
-        if (genreFilter) {
-            genreFilter.addEventListener('change', () => {
-                clearTimeout(this._liveSearchTimeout);
-                this.syncSearchGenreChips(genreFilter.value);
                 this.performSearch();
             });
         }
@@ -430,15 +422,7 @@ class MovieTracker {
                 if (btn) btn.setAttribute('aria-expanded', 'false');
 
                 const genreVal = target.dataset.genre || '';
-                if (genreFilter) {
-                    if (genreVal && !Array.from(genreFilter.options).some(o => o.value.toLowerCase() === genreVal.toLowerCase())) {
-                        const opt = document.createElement('option');
-                        opt.value = genreVal;
-                        opt.textContent = genreVal;
-                        genreFilter.appendChild(opt);
-                    }
-                    genreFilter.value = genreVal;
-                }
+                this._selectedSearchGenre = genreVal;
                 this.syncSearchGenreChips(genreVal);
                 clearTimeout(this._liveSearchTimeout);
                 this.performSearch();
@@ -469,8 +453,8 @@ class MovieTracker {
                 clearTimeout(this._liveSearchTimeout);
                 if (searchInput) searchInput.value = '';
                 if (typeFilter) typeFilter.value = '';
-                if (genreFilter) genreFilter.value = '';
                 if (yearFilter) yearFilter.value = '';
+                this._selectedSearchGenre = '';
                 this.syncSearchGenreChips('');
                 this.performSearch();
             });
@@ -734,6 +718,9 @@ class MovieTracker {
         } else if (sectionName === 'search') {
             if (!this._dbGenres || this._dbGenres.length === 0) {
                 this.loadGenres();
+            }
+            if (!this._dbYearsLoaded) {
+                this.generateYearOptions();
             }
             if (!this._searchState) {
                 this.performSearch();
@@ -2532,10 +2519,10 @@ class MovieTracker {
         try { await this.loadGenres(); } catch (e) { /* ignore */ }
     }
 
-    // Wypełnij `#genre-filter` unikalnymi gatunkami znalezionymi na podstawie podanej listy (dodaje do istniejących opcji, zapewnia odpowiednie etykiety)
+    // Wypełnij `#list-genre-filter` unikalnymi gatunkami znalezionymi na podstawie podanej listy (dodaje do istniejących opcji, zapewnia odpowiednie etykiety)
     populateGenreFilterFromList(list) {
         if (!Array.isArray(list)) return;
-        const selectIds = ['genre-filter', 'list-genre-filter'];
+        const selectIds = ['list-genre-filter'];
         const found = new Set();
         list.forEach(item => {
             const genres = this.parseGenres(item.genre || '');
@@ -3555,7 +3542,7 @@ class MovieTracker {
 
         const query = document.getElementById('search-input')?.value.trim() || '';
         const typeFilter = document.getElementById('type-filter')?.value || '';
-        const genreFilter = document.getElementById('genre-filter')?.value || '';
+        const genreFilter = this._selectedSearchGenre || '';
         const yearFilter = document.getElementById('year-filter')?.value || '';
         const resultsContainer = document.getElementById('search-results');
 
@@ -4705,15 +4692,64 @@ class MovieTracker {
         });
     }
 
-    generateYearOptions() {
+    populateYearFilterOptions(years) {
         const yearFilter = document.getElementById('year-filter');
-        const currentYear = new Date().getFullYear();
-        
-        for (let year = currentYear; year >= 1900; year--) {
+        if (!yearFilter || !Array.isArray(years)) return;
+
+        const prevValue = yearFilter.value;
+        yearFilter.innerHTML = '<option value="">Wszystkie lata</option>';
+
+        years.forEach(y => {
             const option = document.createElement('option');
-            option.value = year;
-            option.textContent = year;
+            option.value = String(y);
+            option.textContent = String(y);
             yearFilter.appendChild(option);
+        });
+
+        if (prevValue && years.some(y => String(y) === String(prevValue))) {
+            yearFilter.value = String(prevValue);
+        }
+    }
+
+    async generateYearOptions() {
+        const yearFilter = document.getElementById('year-filter');
+        if (!yearFilter) return;
+
+        const CACHE_KEY = '_db_years_v1';
+        const CACHE_TTL = 15 * 60 * 1000;
+
+        try {
+            const rawCache = localStorage.getItem(CACHE_KEY);
+            if (rawCache) {
+                const parsed = JSON.parse(rawCache);
+                if (parsed && Array.isArray(parsed.years) && parsed.years.length > 0 && (Date.now() - parsed.ts < CACHE_TTL)) {
+                    this.populateYearFilterOptions(parsed.years);
+                    this._dbYearsLoaded = true;
+                    return;
+                }
+            }
+        } catch (e) { /* ignore cache errors */ }
+
+        try {
+            const res = await fetch('/api/years', { headers: this.getAuthHeaders() });
+            if (!res.ok) {
+                console.warn('Failed to load years from /api/years');
+                return;
+            }
+            const data = await res.json();
+            if (!Array.isArray(data)) return;
+
+            const years = data.map(y => Number(y)).filter(y => Number.isInteger(y));
+            if (years.length === 0) return;
+
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), years }));
+            } catch (e) { /* ignore storage quota errors */ }
+
+            this._dbYearsLoaded = true;
+            this.populateYearFilterOptions(years);
+        } catch (e) {
+            console.warn('Error loading years:', e);
         }
     }
 
