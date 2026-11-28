@@ -3010,6 +3010,30 @@ class MovieTracker {
         return `<svg class="ai-sparkle-icon" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M10.5 2L12.7 8.3L19 10.5L12.7 12.7L10.5 19L8.3 12.7L2 10.5L8.3 8.3L10.5 2Z"/><path d="M18.5 14L19.6 17.4L23 18.5L19.6 19.6L18.5 23L17.4 19.6L14 18.5L17.4 17.4L18.5 14Z"/><path d="M19.5 2.5L20.1 4.4L22 5L20.1 5.6L19.5 7.5L18.9 5.6L17 5L18.9 4.4L19.5 2.5Z"/></svg>`;
     }
 
+    _setAskAiMobileScrollLock(locked) {
+        if (locked && window.innerWidth <= 640) {
+            if (!document.body.classList.contains('ask-ai-mobile-open')) {
+                this._askAiSavedScrollY = window.scrollY || window.pageYOffset || 0;
+                document.documentElement.classList.add('ask-ai-mobile-open');
+                document.body.classList.add('ask-ai-mobile-open');
+                document.body.style.top = `-${this._askAiSavedScrollY}px`;
+            }
+            if (!this._askAiResizeUnlockBound) {
+                this._askAiResizeUnlockBound = true;
+                window.addEventListener('resize', () => {
+                    if (window.innerWidth > 640) {
+                        this._setAskAiMobileScrollLock(false);
+                    }
+                });
+            }
+        } else if (!locked && document.body.classList.contains('ask-ai-mobile-open')) {
+            document.documentElement.classList.remove('ask-ai-mobile-open');
+            document.body.classList.remove('ask-ai-mobile-open');
+            document.body.style.top = '';
+            window.scrollTo(0, this._askAiSavedScrollY || 0);
+        }
+    }
+
     toggleAskAIDrawer(forceState = null) {
         const drawer = document.getElementById('ask-ai-drawer');
         const fab = document.getElementById('ask-ai-fab');
@@ -3021,7 +3045,9 @@ class MovieTracker {
         fab.setAttribute('aria-expanded', shouldOpen ? 'true' : 'false');
         fab.innerHTML = shouldOpen
             ? '<i class="fas fa-chevron-down"></i>'
-            : this._getAiSparkleSvg(22);
+            : this._getAiSparkleSvg(28);
+
+        this._setAskAiMobileScrollLock(shouldOpen);
 
         if (shouldOpen) {
             const input = document.getElementById('ask-ai-input');

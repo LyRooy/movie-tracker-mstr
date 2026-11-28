@@ -5331,13 +5331,13 @@ body.transitions-enabled * {
 .ask-ai-fab {
     position: relative;
     z-index: 1;
-    width: 52px;
-    height: 52px;
-    border-radius: 16px;
+    width: 62px;
+    height: 62px;
+    border-radius: 18px;
     border: 1px solid var(--border-color);
     background: var(--surface-color);
     color: var(--text-color);
-    font-size: 1.2rem;
+    font-size: 1.45rem;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -5361,12 +5361,12 @@ body.transitions-enabled * {
 .ask-ai-drawer {
     position: absolute;
     right: 0;
-    bottom: 64px;
+    bottom: 76px;
     width: 410px;
     max-width: calc(100vw - 24px);
     height: 560px;
-    max-height: calc(100vh - 105px);
-    max-height: calc(100dvh - 105px);
+    max-height: calc(100vh - 116px);
+    max-height: calc(100dvh - 116px);
     z-index: 2;
     background: var(--surface-color);
     border: 1px solid var(--border-color);
@@ -5431,8 +5431,9 @@ body.transitions-enabled * {
 }
 
 .ask-ai-icon-btn {
-    width: 30px;
-    height: 30px;
+    width: 34px;
+    height: 34px;
+    font-size: 0.95rem;
     border-radius: 8px;
     border: none;
     background: transparent;
@@ -5452,6 +5453,8 @@ body.transitions-enabled * {
 .ask-ai-messages {
     flex: 1;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
     padding: 1rem;
     display: flex;
     flex-direction: column;
@@ -5712,6 +5715,17 @@ body.transitions-enabled * {
 }
 
 @media (max-width: 640px) {
+    html.ask-ai-mobile-open,
+    body.ask-ai-mobile-open {
+        overflow: hidden;
+        overscroll-behavior: none;
+    }
+    body.ask-ai-mobile-open {
+        position: fixed;
+        left: 0;
+        right: 0;
+        width: 100%;
+    }
     .ask-ai-widget {
         right: 12px;
         bottom: calc(12px + env(safe-area-inset-bottom, 0px));
@@ -5736,9 +5750,9 @@ body.transitions-enabled * {
         gap: 0.4rem;
     }
     .ask-ai-icon-btn {
-        width: 36px;
-        height: 36px;
-        font-size: 1rem;
+        width: 40px;
+        height: 40px;
+        font-size: 1.05rem;
         background: var(--background-color);
         border: 1px solid var(--border-color);
         color: var(--text-color);
