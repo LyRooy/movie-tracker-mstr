@@ -5329,6 +5329,8 @@ body.transitions-enabled * {
 }
 
 .ask-ai-fab {
+    position: relative;
+    z-index: 1;
     width: 52px;
     height: 52px;
     border-radius: 16px;
@@ -5364,6 +5366,8 @@ body.transitions-enabled * {
     max-width: calc(100vw - 24px);
     height: 560px;
     max-height: calc(100vh - 105px);
+    max-height: calc(100dvh - 105px);
+    z-index: 2;
     background: var(--surface-color);
     border: 1px solid var(--border-color);
     border-radius: 16px;
@@ -5393,6 +5397,7 @@ body.transitions-enabled * {
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 0.5rem;
     padding: 0.75rem 1rem;
     border-bottom: 1px solid var(--border-color);
     flex-shrink: 0;
@@ -5402,6 +5407,7 @@ body.transitions-enabled * {
     display: inline-flex;
     align-items: center;
     gap: 0.5rem;
+    min-width: 0;
     font-weight: 700;
     font-size: 0.98rem;
     color: var(--text-color);
@@ -5421,6 +5427,7 @@ body.transitions-enabled * {
     display: inline-flex;
     align-items: center;
     gap: 0.25rem;
+    flex-shrink: 0;
 }
 
 .ask-ai-icon-btn {
@@ -5704,14 +5711,40 @@ body.transitions-enabled * {
     cursor: not-allowed;
 }
 
-@media (max-width: 520px) {
+@media (max-width: 640px) {
     .ask-ai-widget {
         right: 12px;
-        bottom: 12px;
+        bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     }
     .ask-ai-drawer {
-        width: calc(100vw - 24px);
-        height: calc(100vh - 96px);
+        position: fixed;
+        top: calc(10px + env(safe-area-inset-top, 0px));
+        right: 10px;
+        bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+        left: 10px;
+        width: auto;
+        max-width: none;
+        height: auto;
+        max-height: calc(100dvh - 20px - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px));
+        border-radius: 16px;
+        z-index: 2;
+    }
+    .ask-ai-drawer-header {
+        padding: 0.75rem 0.85rem;
+    }
+    .ask-ai-drawer-actions {
+        gap: 0.4rem;
+    }
+    .ask-ai-icon-btn {
+        width: 36px;
+        height: 36px;
+        font-size: 1rem;
+        background: var(--background-color);
+        border: 1px solid var(--border-color);
+        color: var(--text-color);
+    }
+    .ask-ai-composer input[type="text"] {
+        font-size: 16px;
     }
 }
 

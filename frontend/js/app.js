@@ -3025,7 +3025,7 @@ class MovieTracker {
 
         if (shouldOpen) {
             const input = document.getElementById('ask-ai-input');
-            if (input) setTimeout(() => input.focus(), 40);
+            if (input && window.innerWidth > 640) setTimeout(() => input.focus(), 40);
         }
     }
 
