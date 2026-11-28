@@ -2838,9 +2838,19 @@ class MovieTracker {
             container.appendChild(card);
         });
 
-        if (moreWrap) moreWrap.style.display = this._topHasMore ? 'flex' : 'none';
+        const shownCount = container.querySelectorAll('.top-movie-card').length;
+        const showTopBtn = shownCount >= 60;
+        const showMoreBtn = Boolean(this._topHasMore);
+        const scrollTopBtn = document.getElementById('top-movies-scroll-top');
+
+        if (moreWrap) moreWrap.style.display = (showMoreBtn || showTopBtn) ? 'flex' : 'none';
         if (moreBtn) {
+            moreBtn.style.display = showMoreBtn ? 'inline-block' : 'none';
             moreBtn.onclick = () => this.loadTopMovies(this._topSort, this._topPage + 1, true);
+        }
+        if (scrollTopBtn) {
+            scrollTopBtn.style.display = showTopBtn ? 'inline-flex' : 'none';
+            scrollTopBtn.onclick = () => this.scrollToTop();
         }
 
         // Podpnij przyciski sortowania (tylko raz przy pierwszym renderze)
@@ -3734,16 +3744,35 @@ class MovieTracker {
             }
         }
 
-        // Przycisk "Pokaż więcej" z liczbą pozostałych
-        if (hasMore) {
-            const shown = resultsContainer.querySelectorAll('.movie-card').length;
-            const remaining = typeof this._searchTotal === 'number' ? this._searchTotal - shown : '';
-            const label = remaining ? `Pokaż więcej (jeszcze ~${remaining.toLocaleString('pl-PL')})` : 'Pokaż więcej';
+        // Przycisk "Pokaż więcej" i opcjonalny powrót na górę przy >= 60 pozycjach
+        const shown = resultsContainer.querySelectorAll('.movie-card').length;
+        const showTopBtn = shown >= 60;
+        if (hasMore || showTopBtn) {
             const loadMoreBtn = document.createElement('div');
             loadMoreBtn.className = 'load-more-btn';
-            loadMoreBtn.innerHTML = `<button onclick="app.loadMoreSearchResults()">${label}</button>`;
+            if (hasMore) {
+                const remaining = typeof this._searchTotal === 'number' ? this._searchTotal - shown : '';
+                const label = remaining ? `Pokaż więcej (jeszcze ~${remaining.toLocaleString('pl-PL')})` : 'Pokaż więcej';
+                const moreButton = document.createElement('button');
+                moreButton.type = 'button';
+                moreButton.textContent = label;
+                moreButton.onclick = () => this.loadMoreSearchResults();
+                loadMoreBtn.appendChild(moreButton);
+            }
+            if (showTopBtn) {
+                const topButton = document.createElement('button');
+                topButton.type = 'button';
+                topButton.className = 'scroll-top-btn';
+                topButton.innerHTML = '<i class="fas fa-arrow-up"></i> Do góry';
+                topButton.onclick = () => this.scrollToTop();
+                loadMoreBtn.appendChild(topButton);
+            }
             resultsContainer.appendChild(loadMoreBtn);
         }
+    }
+
+    scrollToTop() {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
     }
 
     async openMovieModal(movie, isEdit = false) {

@@ -2471,6 +2471,9 @@ h3 {
 .load-more-btn {
     display: flex;
     justify-content: center;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
     padding: 1rem 0 0.5rem;
     grid-column: 1 / -1;
 }
@@ -2495,6 +2498,22 @@ h3 {
 
 .load-more-btn button:hover {
     opacity: 0.85;
+}
+
+.load-more-btn .scroll-top-btn {
+    background: var(--surface-color);
+    color: var(--text-color);
+    border: 1.5px solid var(--border-color);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.6rem 1.35rem;
+}
+
+.load-more-btn .scroll-top-btn:hover {
+    border-color: var(--secondary-color);
+    color: var(--secondary-color);
+    opacity: 1;
 }
 
 .user-search-item {
