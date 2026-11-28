@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>MovieTracker</title>
-    <link rel="stylesheet" href="css/styles.css?v=20261125b">
+    <link rel="stylesheet" href="css/styles.css?v=20261128b">
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <script>
         // Ustaw motyw przed załadowaniem strony
@@ -236,7 +236,7 @@
                 
                 <div class="search-container">
                     <div class="search-bar">
-                        <input type="text" id="search-input" placeholder="Wpisz tytuł filmu lub serialu...">
+                        <input type="text" id="search-input" placeholder="Wpisz tytuł filmu lub serialu, albo wybierz kategorię poniżej...">
                     </div>
                     
                     <div class="filters">
@@ -247,15 +247,15 @@
                         </select>
                         <select id="genre-filter">
                             <option value="">Wszystkie gatunki</option>
-                            <option value="Akcja">Akcja</option>
-                            <option value="Komedia">Komedia</option>
-                            <option value="Dramat">Dramat</option>
-                            <option value="Horror">Horror</option>
-                            <option value="Sci-Fi">Sci-Fi</option>
                         </select>
                         <select id="year-filter">
                             <option value="">Wszystkie lata</option>
                         </select>
+                        <button type="button" id="search-reset-filters" class="search-reset-btn" title="Wyczyść wyszukiwanie i filtry">Wyczyść filtry</button>
+                    </div>
+
+                    <div id="search-genre-chips" class="search-genre-chips" role="group" aria-label="Kategorie gatunkowe">
+                        <button type="button" class="genre-chip active" data-genre="">Wszystkie</button>
                     </div>
                 </div>
 
@@ -1144,7 +1144,7 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <script src="js/app.js?v=20261125c"></script>
+    <script src="js/app.js?v=20261128c"></script>
 
     <!-- Rozwijany czat "Zapytaj AI" w prawym dolnym rogu -->
     <div id="ask-ai-widget" class="ask-ai-widget" style="display: none;">

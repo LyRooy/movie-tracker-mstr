@@ -9,6 +9,60 @@ function normalizePosterUrl(url) {
   return url;
 }
 
+function resolvePoster(row) {
+  const pathVal = row?.poster_path && typeof row.poster_path === 'string' ? row.poster_path.trim() : '';
+  const urlVal = row?.poster_url && typeof row.poster_url === 'string' ? row.poster_url.trim() : '';
+  const poster = pathVal || urlVal;
+  if (!poster) return null;
+  if (poster.startsWith('http://')) {
+    return poster.replace('http://', 'https://');
+  }
+  if (!poster.startsWith('http')) {
+    const normalizedPath = poster.startsWith('/') ? poster : `/${poster}`;
+    return `https://image.tmdb.org/t/p/w200${normalizedPath}`;
+  }
+  return poster;
+}
+
+function escapeLike(str) {
+  return String(str).replace(/[\\%_]/g, '\\$&');
+}
+
+function getGenreSearchTerms(genreFilter) {
+  const g = String(genreFilter || '').trim().toLowerCase();
+  if (!g) return [];
+  const normalizedKey = g.replace(/_/g, ' ');
+  const synonymGroups = [
+    ['akcja', 'action'],
+    ['komedia', 'comedy'],
+    ['dramat', 'drama'],
+    ['sci-fi', 'sci fi', 'science fiction', 'science_fiction'],
+    ['horror'],
+    ['thriller', 'dreszczowiec'],
+    ['kryminał', 'kryminal', 'crime'],
+    ['przygodowy', 'przygoda', 'adventure'],
+    ['fantasy'],
+    ['animacja', 'animation'],
+    ['romans', 'romance'],
+    ['dokumentalny', 'dokument', 'documentary'],
+    ['rodzinny', 'family'],
+    ['tajemnica', 'mystery'],
+    ['wojenny', 'war'],
+    ['historyczny', 'history', 'historical'],
+    ['muzyczny', 'music'],
+    ['western']
+  ];
+  for (const group of synonymGroups) {
+    if (group.includes(normalizedKey) || group.includes(g)) {
+      if (normalizedKey.startsWith('sci')) {
+        return ['sci-fi', 'science fiction', 'science_fiction'];
+      }
+      return group;
+    }
+  }
+  return Array.from(new Set([g, normalizedKey, g.replace(/\s+/g, '_')].filter(Boolean)));
+}
+
   function normalizeGenre(genre) {
     if (!genre || typeof genre !== 'string') return '';
         return genre.split(/[,;|]+/)
@@ -46,14 +100,8 @@ export async function onRequest(context) {
     });
   }
 
-  const query = url.searchParams.get('query');
+  const query = url.searchParams.get('query') || '';
   const isCal = url.searchParams.get('mode') === 'calendar';
-  if (query === null && !isCal) {
-    return new Response(JSON.stringify({ error: 'Query parameter required' }), {
-      status: 400,
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
-    });
-  }
 
   // Sprawdź uwierzytelnienie
   const userId = await getUserIdFromRequest(request);
@@ -99,81 +147,184 @@ export async function onRequest(context) {
       });
     }
 
-    // ── ZWYKŁE WYSZUKIWANIE Z PAGINACJĄ ─────────────────────────────────────
-    const page  = Math.max(0, parseInt(url.searchParams.get('page') || '0'));
-    const limit = 24;
+    // ── ZWYKŁE WYSZUKIWANIE / PRZEGLĄDANIE KATALOGU Z PAGINACJĄ ─────────────
+    const page  = Math.max(0, parseInt(url.searchParams.get('page') || '0', 10) || 0);
+    const rawLimit = parseInt(url.searchParams.get('limit') || '30', 10);
+    const limit = Number.isFinite(rawLimit) ? Math.min(40, Math.max(1, rawLimit)) : 30;
+    const fetchLimit = limit + 1;
     const offset = page * limit;
-    const searchQuery = `%${query.toLowerCase()}%`;
 
-    // Zlicz wszystkie pasujące rekordy
-    const countRow = await env.db.prepare(`
-      SELECT COUNT(*) as total FROM movies
-      WHERE LOWER(title) LIKE ? OR LOWER(genre) LIKE ? OR LOWER(description) LIKE ?
-    `).bind(searchQuery, searchQuery, searchQuery).first();
-    const total = countRow ? countRow.total : 0;
+    const normalizedQuery = query.trim().replace(/\s+/g, ' ');
+    const whereClauses = [];
+    const whereParams = [];
 
-    const result = await env.db.prepare(`
+    if (normalizedQuery) {
+      const qLower = normalizedQuery.toLowerCase();
+      let tokens = qLower.split(/[\s:;,.\-–—/]+/).filter(Boolean).slice(0, 6);
+      if (tokens.length === 0) {
+        tokens = [qLower];
+      }
+
+      if (tokens.length === 1) {
+        const p = `%${escapeLike(tokens[0])}%`;
+        whereClauses.push("(LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(original_title, '')) LIKE ? ESCAPE '\\')");
+        whereParams.push(p, p);
+      } else {
+        const titleConds = tokens.map(() => "LOWER(title) LIKE ? ESCAPE '\\'").join(' AND ');
+        const origConds = tokens.map(() => "LOWER(IFNULL(original_title, '')) LIKE ? ESCAPE '\\'").join(' AND ');
+        whereClauses.push(`((${titleConds}) OR (${origConds}))`);
+        const tokenPatterns = tokens.map(t => `%${escapeLike(t)}%`);
+        whereParams.push(...tokenPatterns, ...tokenPatterns);
+      }
+    }
+
+    const typeFilter = (url.searchParams.get('type') || '').trim().toLowerCase();
+    if (typeFilter === 'movie' || typeFilter === 'series') {
+      whereClauses.push('media_type = ?');
+      whereParams.push(typeFilter);
+    }
+
+    const genreFilter = (url.searchParams.get('genre') || '').trim();
+    if (genreFilter) {
+      const genreTerms = getGenreSearchTerms(genreFilter);
+      if (genreTerms.length > 0) {
+        const genreConds = genreTerms.map(() => "LOWER(COALESCE(NULLIF(genre, ''), genres, '')) LIKE ? ESCAPE '\\'").join(' OR ');
+        whereClauses.push(`(${genreConds})`);
+        genreTerms.forEach(term => whereParams.push(`%${escapeLike(term)}%`));
+      }
+    }
+
+    const yearFilter = (url.searchParams.get('year') || '').trim();
+    if (yearFilter) {
+      if (/^\d{4}$/.test(yearFilter)) {
+        whereClauses.push('substr(release_date, 1, 4) = ?');
+        whereParams.push(yearFilter);
+      } else if (/^\d{4}-\d{4}$/.test(yearFilter)) {
+        const [startYear, endYear] = yearFilter.split('-').map(Number);
+        whereClauses.push('CAST(substr(release_date, 1, 4) AS INTEGER) BETWEEN ? AND ?');
+        whereParams.push(startYear, endYear);
+      }
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    let orderClause;
+    let queryParams;
+    if (normalizedQuery) {
+      const qLower = normalizedQuery.toLowerCase();
+      const qWithThe = qLower.startsWith('the ') ? qLower : `the ${qLower}`;
+      const qEsc = escapeLike(qLower);
+      const qWithTheEsc = escapeLike(qWithThe);
+      orderClause = `
+        CASE
+          WHEN LOWER(title) = ? OR LOWER(IFNULL(original_title, '')) = ?
+            OR LOWER(title) = ? OR LOWER(IFNULL(original_title, '')) = ? THEN 0
+          WHEN LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(original_title, '')) LIKE ? ESCAPE '\\'
+            OR LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(original_title, '')) LIKE ? ESCAPE '\\' THEN 1
+          WHEN LOWER(title) LIKE ? ESCAPE '\\' OR LOWER(IFNULL(original_title, '')) LIKE ? ESCAPE '\\' THEN 2
+          ELSE 3
+        END,
+        COALESCE(popularity, 0) DESC,
+        COALESCE(vote_count, 0) DESC,
+        COALESCE(imdb_rating, vote_average, 0) DESC,
+        title ASC
+      `;
+      queryParams = [
+        ...whereParams,
+        qLower, qLower, qWithThe, qWithThe,
+        `${qEsc}%`, `${qEsc}%`, `${qWithTheEsc}%`, `${qWithTheEsc}%`,
+        `%${qEsc}%`, `%${qEsc}%`,
+        fetchLimit, offset
+      ];
+    } else {
+      orderClause = 'popularity DESC, vote_count DESC, imdb_rating DESC, title ASC';
+      queryParams = [...whereParams, fetchLimit, offset];
+    }
+
+    const sql = `
       SELECT 
         id,
         title,
+        original_title,
         media_type as type,
         release_date,
         strftime('%Y', release_date) as year,
-        genre,
-        poster_url as poster,
+        COALESCE(NULLIF(genre, ''), genres, '') as genre,
+        poster_path,
+        poster_url,
         trailer_url,
-        description,
+        COALESCE(NULLIF(description, ''), overview, '') as description,
         duration,
         COALESCE(total_seasons, 1) as total_seasons,
-        COALESCE(total_episodes, 1) as total_episodes
-      FROM movies 
-      WHERE LOWER(title) LIKE ? OR LOWER(genre) LIKE ? OR LOWER(description) LIKE ?
-      ORDER BY
-        CASE WHEN LOWER(title) LIKE ? THEN 0 ELSE 1 END,
-        title
+        COALESCE(total_episodes, 1) as total_episodes,
+        popularity,
+        vote_count,
+        vote_average,
+        imdb_rating
+      FROM movies
+      ${whereSql}
+      ORDER BY ${orderClause}
       LIMIT ? OFFSET ?
-    `).bind(searchQuery, searchQuery, searchQuery, searchQuery, limit, offset).all();
+    `;
 
-    // Przekształć do formatu zgodnego z frontendem
-    const transformedResults = await Promise.all(result.results.map(async row => {
-      const rawYear = parseInt(row.year);
-      const currentYear = new Date().getFullYear();
-      const year = (Number.isFinite(rawYear) && rawYear >= 1800 && rawYear <= currentYear + 5) ? rawYear : null;
-      const duration = (row.duration !== undefined && row.duration !== null) ? Number(row.duration) : null;
-      
-      // For series, calculate average episode duration
-      let avgEpisodeLength = null;
-      if (row.type === 'series') {
-        try {
-          const avgRes = await env.db.prepare(`
-            SELECT AVG(e.duration) as avg_duration
-            FROM episodes e
-            JOIN seasons s ON e.season_id = s.id
-            WHERE s.series_id = ?
-          `).bind(row.id).first();
-          if (avgRes && avgRes.avg_duration !== null) {
-            avgEpisodeLength = Math.round(avgRes.avg_duration);
-          }
-        } catch (e) {
-          console.warn('Could not compute avg episode duration for search:', e);
-        }
-      }
-      
-      // Oblicz średnią ocenę z recenzji
-      let avgRating = 0;
+    const result = await env.db.prepare(sql).bind(...queryParams).all();
+    const rawRows = result.results || [];
+    const hasMore = rawRows.length > limit;
+    const pageRows = hasMore ? rawRows.slice(0, limit) : rawRows;
+
+    const movieIds = pageRows.map(r => r.id);
+    const seriesIds = pageRows.filter(r => r.type === 'series').map(r => r.id);
+
+    const reviewsMap = new Map();
+    if (movieIds.length > 0) {
       try {
+        const placeholders = movieIds.map(() => '?').join(',');
         const reviewsRes = await env.db.prepare(`
-          SELECT AVG(rating) as avg_rating, COUNT(*) as review_count
+          SELECT movie_id, AVG(rating) as avg_rating, COUNT(*) as review_count
           FROM reviews
-          WHERE movie_id = ?
-        `).bind(row.id).first();
-        if (reviewsRes && reviewsRes.review_count > 0 && reviewsRes.avg_rating !== null) {
-          avgRating = Math.round(reviewsRes.avg_rating * 10) / 10;
+          WHERE movie_id IN (${placeholders})
+          GROUP BY movie_id
+        `).bind(...movieIds).all();
+        for (const r of (reviewsRes.results || [])) {
+          if (r.review_count > 0 && r.avg_rating !== null) {
+            reviewsMap.set(r.movie_id, Math.round(r.avg_rating * 10) / 10);
+          }
         }
       } catch (e) {
-        console.warn('Could not compute avg rating for search:', e);
+        console.warn('Could not compute avg ratings for search batch:', e);
       }
-      
+    }
+
+    const episodeAvgMap = new Map();
+    if (seriesIds.length > 0) {
+      try {
+        const placeholders = seriesIds.map(() => '?').join(',');
+        const avgRes = await env.db.prepare(`
+          SELECT s.series_id, AVG(e.duration) as avg_duration
+          FROM episodes e
+          JOIN seasons s ON e.season_id = s.id
+          WHERE s.series_id IN (${placeholders})
+          GROUP BY s.series_id
+        `).bind(...seriesIds).all();
+        for (const r of (avgRes.results || [])) {
+          if (r.avg_duration !== null) {
+            episodeAvgMap.set(r.series_id, Math.round(r.avg_duration));
+          }
+        }
+      } catch (e) {
+        console.warn('Could not compute avg episode duration for search batch:', e);
+      }
+    }
+
+    const currentYear = new Date().getFullYear();
+    const transformedResults = pageRows.map(row => {
+      const rawYear = parseInt(row.year, 10);
+      const year = (Number.isFinite(rawYear) && rawYear >= 1800 && rawYear <= currentYear + 5) ? rawYear : null;
+      const duration = (row.duration !== undefined && row.duration !== null) ? Number(row.duration) : null;
+      const avgEpisodeLength = row.type === 'series' ? (episodeAvgMap.get(row.id) ?? null) : null;
+      const avgRating = reviewsMap.get(row.id) ?? 0;
+      const posterUrl = resolvePoster(row);
+
       return {
         id: `db_${row.id}`,
         title: row.title,
@@ -181,8 +332,8 @@ export async function onRequest(context) {
         year: year,
         release_date: row.release_date || null,
         genre: normalizeGenre(row.genre) || 'Unknown',
-        poster_url: normalizePosterUrl(row.poster) || null,
-        poster: normalizePosterUrl(row.poster) || `https://placehold.co/200x300/4CAF50/white/png?text=${encodeURIComponent(row.title)}`,
+        poster_url: posterUrl,
+        poster: posterUrl || `https://placehold.co/200x300/4CAF50/white/png?text=${encodeURIComponent(row.title)}`,
         trailer_url: row.trailer_url || null,
         description: row.description || '',
         duration: row.type === 'movie' ? duration : (avgEpisodeLength || null),
@@ -193,13 +344,13 @@ export async function onRequest(context) {
         status: 'planning',
         watchedDate: new Date().toISOString().split('T')[0]
       };
-    }));
+    });
 
     return new Response(JSON.stringify({
       results: transformedResults,
-      total,
+      total: null,
       page,
-      hasMore: offset + limit < total
+      hasMore
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });

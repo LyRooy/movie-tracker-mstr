@@ -86,18 +86,134 @@ class MovieTracker {
     }
 
     async loadGenres() {
+        const CACHE_KEY = '_db_genres_v1';
+        const CACHE_TTL = 15 * 60 * 1000;
+
         try {
-            const res = await fetch('/api/genres', { headers: this.getAuthHeaders() });
+            const rawCache = localStorage.getItem(CACHE_KEY);
+            if (rawCache) {
+                const parsed = JSON.parse(rawCache);
+                if (parsed && Array.isArray(parsed.items) && parsed.items.length > 0 && (Date.now() - parsed.ts < CACHE_TTL)) {
+                    this._dbGenres = parsed.items;
+                    this.populateGenreFilterFromValues(parsed.items.map(g => g.name));
+                    this.renderSearchGenreChips(parsed.items);
+                    return;
+                }
+            }
+        } catch (e) { /* ignore cache errors */ }
+
+        try {
+            const res = await fetch('/api/genres?with_counts=1', { headers: this.getAuthHeaders() });
             if (!res.ok) {
                 console.warn('Failed to load genres from /api/genres');
                 return;
             }
-            const genres = await res.json();
-            if (!Array.isArray(genres)) return;
-            this.populateGenreFilterFromValues(genres);
+            const data = await res.json();
+            if (!Array.isArray(data)) return;
+
+            const items = data
+                .map(g => typeof g === 'string'
+                    ? { name: g.trim(), count: 0 }
+                    : { name: String(g?.name || '').trim(), count: Number(g?.count) || 0 })
+                .filter(g => g.name.length > 0);
+
+            if (items.length === 0) return;
+
+            try {
+                localStorage.setItem(CACHE_KEY, JSON.stringify({ ts: Date.now(), items }));
+            } catch (e) { /* ignore storage quota errors */ }
+
+            this._dbGenres = items;
+            this.populateGenreFilterFromValues(items.map(g => g.name));
+            this.renderSearchGenreChips(items);
         } catch (e) {
             console.error('Error loading genres:', e);
         }
+    }
+
+    renderSearchGenreChips(genres) {
+        const container = document.getElementById('search-genre-chips');
+        if (!container) return;
+
+        const MAX_VISIBLE = 8;
+        const list = Array.isArray(genres) ? genres : [];
+        const visible = list.slice(0, MAX_VISIBLE);
+        const overflow = list.slice(MAX_VISIBLE);
+
+        container.innerHTML = '';
+
+        const allBtn = document.createElement('button');
+        allBtn.type = 'button';
+        allBtn.className = 'genre-chip active';
+        allBtn.dataset.genre = '';
+        allBtn.textContent = 'Wszystkie';
+        container.appendChild(allBtn);
+
+        visible.forEach(item => {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'genre-chip';
+            btn.dataset.genre = item.name;
+            btn.textContent = item.name;
+            btn.title = item.count ? `${item.name} (${item.count.toLocaleString('pl-PL')})` : item.name;
+            container.appendChild(btn);
+        });
+
+        if (overflow.length > 0) {
+            const wrap = document.createElement('div');
+            wrap.className = 'genre-more-wrap';
+
+            const defaultLabel = `Więcej (${overflow.length})`;
+            const moreBtn = document.createElement('button');
+            moreBtn.type = 'button';
+            moreBtn.id = 'search-genre-more-btn';
+            moreBtn.className = 'genre-chip genre-chip-more';
+            moreBtn.setAttribute('aria-expanded', 'false');
+            moreBtn.setAttribute('aria-haspopup', 'listbox');
+            moreBtn.dataset.defaultLabel = defaultLabel;
+
+            const labelSpan = document.createElement('span');
+            labelSpan.className = 'genre-more-label';
+            labelSpan.textContent = defaultLabel;
+            const icon = document.createElement('i');
+            icon.className = 'fas fa-chevron-down';
+            moreBtn.appendChild(labelSpan);
+            moreBtn.appendChild(icon);
+
+            const menu = document.createElement('div');
+            menu.id = 'search-genre-more-menu';
+            menu.className = 'genre-more-menu';
+            menu.setAttribute('role', 'listbox');
+            menu.hidden = true;
+
+            overflow.forEach(item => {
+                const itemBtn = document.createElement('button');
+                itemBtn.type = 'button';
+                itemBtn.className = 'genre-more-item';
+                itemBtn.dataset.genre = item.name;
+                itemBtn.setAttribute('role', 'option');
+
+                const nameSpan = document.createElement('span');
+                nameSpan.textContent = item.name;
+                itemBtn.appendChild(nameSpan);
+
+                if (item.count > 0) {
+                    const countSpan = document.createElement('span');
+                    countSpan.className = 'genre-more-count';
+                    countSpan.textContent = item.count.toLocaleString('pl-PL');
+                    itemBtn.appendChild(countSpan);
+                }
+
+                menu.appendChild(itemBtn);
+            });
+
+            wrap.appendChild(moreBtn);
+            wrap.appendChild(menu);
+            container.appendChild(wrap);
+        }
+
+        const currentGenre = document.getElementById('genre-filter')?.value || '';
+        this.syncSearchGenreChips(currentGenre);
     }
 
     // Wypełnij pola wyboru gatunków na podstawie podanej tablicy wartości
@@ -107,6 +223,7 @@ class MovieTracker {
         selectIds.forEach(id => {
             const genreSelect = document.getElementById(id);
             if (!genreSelect) return;
+            const prevValue = genreSelect.value;
             const existingDisplay = new Set(Array.from(genreSelect.options).map(o => (o.textContent || o.value || '').toLowerCase().trim()));
             values.forEach(g => {
                 if (!g) return;
@@ -118,6 +235,9 @@ class MovieTracker {
                     genreSelect.appendChild(opt);
                 }
             });
+            if (prevValue) {
+                genreSelect.value = prevValue;
+            }
         });
     }
     // ============= BIND EVENTS =============
@@ -235,27 +355,30 @@ class MovieTracker {
 
         if (searchInput) {
             // Wyszukiwanie po naciśnięciu Enter
-            searchInput.addEventListener('keypress', (e) => {
+            searchInput.addEventListener('keydown', (e) => {
                 if (e.key === 'Enter') {
+                    e.preventDefault();
+                    clearTimeout(this._liveSearchTimeout);
                     this.performSearch();
                 }
             });
 
             // Sugestie na żywo podczas pisania (z opóźnieniem)
-            let liveSearchTimeout;
             searchInput.addEventListener('input', (e) => {
-                clearTimeout(liveSearchTimeout);
+                clearTimeout(this._liveSearchTimeout);
                 const query = e.target.value.trim();
-                if (query.length < 1) {
-                    const resultsContainer = document.getElementById('search-results');
-                    if (resultsContainer) resultsContainer.innerHTML = '';
+                if (query.length === 0) {
+                    this.performSearch();
                     return;
                 }
 
-                liveSearchTimeout = setTimeout(() => {
-                    // Wykonaj wyszukiwanie
+                if (query.length < 2) {
+                    return;
+                }
+
+                this._liveSearchTimeout = setTimeout(() => {
                     this.performSearch();
-                }, 250);
+                }, 320);
             });
         }
 
@@ -263,19 +386,92 @@ class MovieTracker {
         const typeFilter = document.getElementById('type-filter');
         const genreFilter = document.getElementById('genre-filter');
         const yearFilter = document.getElementById('year-filter');
+        const genreChipsContainer = document.getElementById('search-genre-chips');
+        const resetFiltersBtn = document.getElementById('search-reset-filters');
         
         if (typeFilter) {
             typeFilter.addEventListener('change', () => {
+                clearTimeout(this._liveSearchTimeout);
                 this.performSearch();
             });
         }
         if (genreFilter) {
             genreFilter.addEventListener('change', () => {
+                clearTimeout(this._liveSearchTimeout);
+                this.syncSearchGenreChips(genreFilter.value);
                 this.performSearch();
             });
         }
         if (yearFilter) {
             yearFilter.addEventListener('change', () => {
+                clearTimeout(this._liveSearchTimeout);
+                this.performSearch();
+            });
+        }
+        if (genreChipsContainer) {
+            genreChipsContainer.addEventListener('click', (e) => {
+                const moreBtn = e.target.closest('#search-genre-more-btn');
+                if (moreBtn) {
+                    const menu = document.getElementById('search-genre-more-menu');
+                    if (menu) {
+                        const willOpen = menu.hidden;
+                        menu.hidden = !willOpen;
+                        moreBtn.setAttribute('aria-expanded', willOpen ? 'true' : 'false');
+                    }
+                    return;
+                }
+
+                const target = e.target.closest('.genre-chip:not(.genre-chip-more), .genre-more-item');
+                if (!target) return;
+
+                const menu = document.getElementById('search-genre-more-menu');
+                const btn = document.getElementById('search-genre-more-btn');
+                if (menu) menu.hidden = true;
+                if (btn) btn.setAttribute('aria-expanded', 'false');
+
+                const genreVal = target.dataset.genre || '';
+                if (genreFilter) {
+                    if (genreVal && !Array.from(genreFilter.options).some(o => o.value.toLowerCase() === genreVal.toLowerCase())) {
+                        const opt = document.createElement('option');
+                        opt.value = genreVal;
+                        opt.textContent = genreVal;
+                        genreFilter.appendChild(opt);
+                    }
+                    genreFilter.value = genreVal;
+                }
+                this.syncSearchGenreChips(genreVal);
+                clearTimeout(this._liveSearchTimeout);
+                this.performSearch();
+            });
+
+            if (!this._genreMoreOutsideBound) {
+                this._genreMoreOutsideBound = true;
+                document.addEventListener('click', (e) => {
+                    if (!e.target.closest('.genre-more-wrap')) {
+                        const menu = document.getElementById('search-genre-more-menu');
+                        const btn = document.getElementById('search-genre-more-btn');
+                        if (menu && !menu.hidden) menu.hidden = true;
+                        if (btn) btn.setAttribute('aria-expanded', 'false');
+                    }
+                });
+                document.addEventListener('keydown', (e) => {
+                    if (e.key === 'Escape') {
+                        const menu = document.getElementById('search-genre-more-menu');
+                        const btn = document.getElementById('search-genre-more-btn');
+                        if (menu && !menu.hidden) menu.hidden = true;
+                        if (btn) btn.setAttribute('aria-expanded', 'false');
+                    }
+                });
+            }
+        }
+        if (resetFiltersBtn) {
+            resetFiltersBtn.addEventListener('click', () => {
+                clearTimeout(this._liveSearchTimeout);
+                if (searchInput) searchInput.value = '';
+                if (typeFilter) typeFilter.value = '';
+                if (genreFilter) genreFilter.value = '';
+                if (yearFilter) yearFilter.value = '';
+                this.syncSearchGenreChips('');
                 this.performSearch();
             });
         }
@@ -535,6 +731,13 @@ class MovieTracker {
             this.loadCharts();
         } else if (sectionName === 'my-list') {
             this.displayMyList(this.currentListStatus);
+        } else if (sectionName === 'search') {
+            if (!this._dbGenres || this._dbGenres.length === 0) {
+                this.loadGenres();
+            }
+            if (!this._searchState) {
+                this.performSearch();
+            }
         } else if (sectionName === 'profile') {
             this.loadProfileData();
         } else if (sectionName === 'challenges') {
@@ -3303,149 +3506,191 @@ class MovieTracker {
         document.getElementById('avg-rating').textContent = avgRating;
     }
 
-    async performSearch() {
-        const query = document.getElementById('search-input').value.trim();
-        const typeFilter = document.getElementById('type-filter').value;
-        const genreFilter = document.getElementById('genre-filter').value;
-        const yearFilter = document.getElementById('year-filter').value;
+    syncSearchGenreChips(genreValue) {
+        const container = document.getElementById('search-genre-chips');
+        if (!container) return;
 
-        if (!query) {
-            this.displaySearchResults([], false, false);
-            return;
+        const targetLower = String(genreValue || '').trim().toLowerCase();
+
+        container.querySelectorAll('.genre-chip:not(.genre-chip-more)').forEach(chip => {
+            const chipVal = (chip.dataset.genre || '').trim().toLowerCase();
+            chip.classList.toggle('active', chipVal === targetLower);
+        });
+
+        let activeOverflowLabel = null;
+        container.querySelectorAll('.genre-more-item').forEach(item => {
+            const itemVal = (item.dataset.genre || '').trim().toLowerCase();
+            const isMatch = Boolean(targetLower) && itemVal === targetLower;
+            item.classList.toggle('active', isMatch);
+            if (isMatch) {
+                activeOverflowLabel = item.dataset.genre;
+            }
+        });
+
+        const moreBtn = document.getElementById('search-genre-more-btn');
+        if (moreBtn) {
+            const labelEl = moreBtn.querySelector('.genre-more-label');
+            if (activeOverflowLabel) {
+                moreBtn.classList.add('active');
+                if (labelEl) labelEl.textContent = activeOverflowLabel;
+            } else {
+                moreBtn.classList.remove('active');
+                if (labelEl && moreBtn.dataset.defaultLabel) {
+                    labelEl.textContent = moreBtn.dataset.defaultLabel;
+                }
+            }
+        }
+    }
+
+    async performSearch() {
+        clearTimeout(this._liveSearchTimeout);
+
+        if (this._searchAbortController) {
+            this._searchAbortController.abort();
+            this._searchAbortController = null;
         }
 
-        // Nowe wyszukiwanie - resetuj paginację
+        this._searchRequestId = (this._searchRequestId || 0) + 1;
+        const requestId = this._searchRequestId;
+
+        const query = document.getElementById('search-input')?.value.trim() || '';
+        const typeFilter = document.getElementById('type-filter')?.value || '';
+        const genreFilter = document.getElementById('genre-filter')?.value || '';
+        const yearFilter = document.getElementById('year-filter')?.value || '';
+        const resultsContainer = document.getElementById('search-results');
+
+        this.syncSearchGenreChips(genreFilter);
+
+        // Nowe wyszukiwanie / przeglądanie - resetuj paginację
         this._searchState = { query, typeFilter, genreFilter, yearFilter, page: 0 };
+        this._searchLoadingMore = false;
+
+        if (resultsContainer) {
+            resultsContainer.innerHTML = '<p class="search-loading">Wyszukiwanie...</p>';
+        }
+
+        const controller = new AbortController();
+        this._searchAbortController = controller;
+
+        const params = new URLSearchParams({
+            page: '0',
+            limit: '30'
+        });
+        if (query) params.set('query', query);
+        if (typeFilter) params.set('type', typeFilter);
+        if (genreFilter) params.set('genre', genreFilter);
+        if (yearFilter) params.set('year', yearFilter);
 
         try {
-            const response = await fetch(`/api/search?query=${encodeURIComponent(query)}&page=0`, {
-                headers: this.getAuthHeaders()
+            const response = await fetch(`/api/search?${params.toString()}`, {
+                headers: this.getAuthHeaders(),
+                signal: controller.signal
             });
-            let results = [];
-            let hasMore = false;
-            let total = 0;
-            
-            if (response.ok) {
-                const data = await response.json();
-                // Nowe API zwraca { results, total, hasMore, page }
-                results = data.results || (Array.isArray(data) ? data : []);
-                hasMore  = data.hasMore || false;
-                total    = data.total || results.length;
-                this._searchTotal = total;
-            } else {
-                console.warn('Search API failed, showing empty results');
+
+            if (requestId !== this._searchRequestId) return;
+
+            if (!response.ok) {
+                console.warn('Search API failed with status:', response.status);
+                if (resultsContainer) {
+                    resultsContainer.innerHTML = '<p class="search-error">Wystąpił błąd podczas wyszukiwania. Spróbuj ponownie.</p>';
+                }
+                return;
             }
 
-            // Zastosuj lokalne filtry
-            let filteredResults = results;
+            const data = await response.json();
+            if (requestId !== this._searchRequestId) return;
 
-            if (typeFilter) {
-                filteredResults = filteredResults.filter(item => item.type === typeFilter);
-            }
+            const results = data.results || (Array.isArray(data) ? data : []);
+            const hasMore = Boolean(data.hasMore);
+            this._searchTotal = typeof data.total === 'number' ? data.total : null;
 
-            if (genreFilter) {
-                filteredResults = filteredResults.filter(item => {
-                    try { return this.genreMatches(item.genre, genreFilter); } catch (e) { return false; }
-                });
-            }
-
-            if (yearFilter) {
-                filteredResults = filteredResults.filter(item => {
-                    // Pobierz rok z różnych możliwych pól
-                    let itemYear = null;
-                    
-                    // Najpierw sprawdź pole year
-                    if (item.year) {
-                        itemYear = String(item.year);
-                    } 
-                    // Jeśli nie ma, sprawdź release_date lub releaseDate
-                    else if (item.release_date || item.releaseDate) {
-                        const rd = String(item.release_date || item.releaseDate);
-                        // Wyciągnij rok z różnych formatów
-                        const yearMatch = rd.match(/(\d{4})/);
-                        if (yearMatch) {
-                            itemYear = yearMatch[1];
-                        }
-                    }
-                    
-                    if (!itemYear) return false;
-                    
-                    // Porównaj z filtrem
-                    // Jeśli filtr to zakres (np. "2014-2019"), sprawdź czy rok jest w zakresie
-                    if (/^\d{4}-\d{4}$/.test(yearFilter)) {
-                        const [startYear, endYear] = yearFilter.split('-').map(Number);
-                        const year = Number(itemYear);
-                        return year >= startYear && year <= endYear;
-                    } 
-                    // Jeśli filtr to pojedynczy rok, porównaj bezpośrednio
-                    else {
-                        return itemYear === yearFilter;
-                    }
-                });
-            }
-
-            this.displaySearchResults(filteredResults, hasMore, false);
+            this.displaySearchResults(results, hasMore, false);
         } catch (error) {
+            if (error && error.name === 'AbortError') return;
             console.error('Search error:', error);
-            this.displaySearchResults([], false, false);
+            if (requestId === this._searchRequestId && resultsContainer) {
+                resultsContainer.innerHTML = '<p class="search-error">Wystąpił błąd podczas wyszukiwania. Spróbuj ponownie.</p>';
+            }
+        } finally {
+            if (this._searchAbortController === controller) {
+                this._searchAbortController = null;
+            }
         }
     }
 
     async loadMoreSearchResults() {
-        if (!this._searchState) return;
+        if (!this._searchState || this._searchLoadingMore) return;
+        this._searchLoadingMore = true;
+
+        const requestId = this._searchRequestId;
         this._searchState.page++;
         const { query, typeFilter, genreFilter, yearFilter, page } = this._searchState;
+
+        const params = new URLSearchParams({
+            page: String(page),
+            limit: '30'
+        });
+        if (query) params.set('query', query);
+        if (typeFilter) params.set('type', typeFilter);
+        if (genreFilter) params.set('genre', genreFilter);
+        if (yearFilter) params.set('year', yearFilter);
+
         try {
-            const response = await fetch(`/api/search?query=${encodeURIComponent(query)}&page=${page}`, {
+            const response = await fetch(`/api/search?${params.toString()}`, {
                 headers: this.getAuthHeaders()
             });
-            if (!response.ok) return;
+            if (requestId !== this._searchRequestId) return;
+            if (!response.ok) {
+                this._searchState.page = Math.max(0, this._searchState.page - 1);
+                return;
+            }
             const data = await response.json();
-            let results = data.results || [];
-            const hasMore = data.hasMore || false;
+            if (requestId !== this._searchRequestId) return;
 
-            if (typeFilter)  results = results.filter(i => i.type === typeFilter);
-            if (genreFilter) results = results.filter(i => { try { return this.genreMatches(i.genre, genreFilter); } catch(e) { return false; } });
-            if (yearFilter)  results = results.filter(i => {
-                const rd = String(i.release_date || i.year || '');
-                const ym = rd.match(/(\d{4})/);
-                const yr = ym ? ym[1] : null;
-                if (!yr) return false;
-                if (/^\d{4}-\d{4}$/.test(yearFilter)) {
-                    const [s, e] = yearFilter.split('-').map(Number);
-                    return Number(yr) >= s && Number(yr) <= e;
-                }
-                return yr === yearFilter;
-            });
-
+            const results = data.results || [];
+            const hasMore = Boolean(data.hasMore);
             this.displaySearchResults(results, hasMore, true);
         } catch (e) {
+            if (e && e.name === 'AbortError') return;
+            if (this._searchState) {
+                this._searchState.page = Math.max(0, this._searchState.page - 1);
+            }
             console.error('Load more error:', e);
+        } finally {
+            this._searchLoadingMore = false;
         }
     }
 
     displaySearchResults(results, hasMore = false, append = false) {
         const resultsContainer = document.getElementById('search-results');
 
-        // Usuń poprzedni przycisk "Pokaż więcej" i licznik jeśli istnieją
+        // Usuń poprzedni przycisk "Pokaż więcej"; licznik usuwamy tylko przy nowym wyszukiwaniu
         resultsContainer.querySelector('.load-more-btn')?.remove();
-        resultsContainer.querySelector('.search-count')?.remove();
-
         if (!append) {
+            resultsContainer.querySelector('.search-count')?.remove();
             resultsContainer.innerHTML = '';
         }
 
         if (!append && results.length === 0) {
             resultsContainer.innerHTML = '<p>Nie znaleziono wyników.</p>';
-            this.populateGenreFilterFromList(results);
             return;
         }
 
+        const isBrowseMode = !this._searchState?.query;
+
         // Licznik wyników - tylko przy pierwszej stronie
-        if (!append && this._searchTotal !== undefined) {
+        if (!append) {
             const counter = document.createElement('div');
             counter.className = 'search-count';
-            counter.textContent = `Znaleziono: ${this._searchTotal.toLocaleString('pl-PL')} wyników`;
+            if (typeof this._searchTotal === 'number') {
+                counter.textContent = `Znaleziono: ${this._searchTotal.toLocaleString('pl-PL')} wyników`;
+            } else if (isBrowseMode) {
+                counter.textContent = `Wyświetlono ${results.length} najpopularniejszych produkcji${hasMore ? ' (dostępne kolejne)' : ''}`;
+            } else if (hasMore) {
+                counter.textContent = `Wyświetlono ${results.length} najlepiej dopasowanych wyników (dostępne kolejne)`;
+            } else {
+                counter.textContent = `Znaleziono: ${results.length} wyników`;
+            }
             resultsContainer.appendChild(counter);
         }
 
@@ -3488,20 +3733,29 @@ class MovieTracker {
             resultsContainer.appendChild(movieCard);
         });
 
+        if (append) {
+            const existingCounter = resultsContainer.querySelector('.search-count');
+            if (existingCounter) {
+                const shown = resultsContainer.querySelectorAll('.movie-card').length;
+                if (typeof this._searchTotal === 'number') {
+                    existingCounter.textContent = `Znaleziono: ${this._searchTotal.toLocaleString('pl-PL')} wyników (wyświetlono ${shown})`;
+                } else if (isBrowseMode) {
+                    existingCounter.textContent = `Wyświetlono ${shown} najpopularniejszych produkcji${hasMore ? ' (dostępne kolejne)' : ''}`;
+                } else {
+                    existingCounter.textContent = `Wyświetlono ${shown} wyników${hasMore ? ' (dostępne kolejne)' : ''}`;
+                }
+            }
+        }
+
         // Przycisk "Pokaż więcej" z liczbą pozostałych
         if (hasMore) {
             const shown = resultsContainer.querySelectorAll('.movie-card').length;
-            const remaining = this._searchTotal ? this._searchTotal - shown : '';
-            const label = remaining ? `Pokaż więcej (jeszcze ~${remaining.toLocaleString('pl-PL')})` : 'Pokaż więcej wyników';
+            const remaining = typeof this._searchTotal === 'number' ? this._searchTotal - shown : '';
+            const label = remaining ? `Pokaż więcej (jeszcze ~${remaining.toLocaleString('pl-PL')})` : 'Pokaż więcej';
             const loadMoreBtn = document.createElement('div');
             loadMoreBtn.className = 'load-more-btn';
             loadMoreBtn.innerHTML = `<button onclick="app.loadMoreSearchResults()">${label}</button>`;
             resultsContainer.appendChild(loadMoreBtn);
-        }
-
-        // Aktualizuj filtry gatunków nawet jeśli brak wyników
-        if (!append) {
-            try { this.populateGenreFilterFromList(results); } catch (e) { /* ignore */ }
         }
     }
 
